@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -218,3 +218,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SesPusula local runtime, models and private work
+.state/
+.runtime/
+.models/
+vendor/
+gpt.md
+AGENTS.md
+Dogrulama/
+SHA256SUMS.json
+*.exe
+*.dll
+*.zip
+*.7z
+*.wav
+*.mp3
+*.mp4
+*.mkv
+*.mov
+*.srt
+.env.*
+!.env.example

@@ -1,0 +1,4 @@
+Python: Python-LICENSE.txt
+Paket lisansları: .runtime/Lib/site-packages/*dist-info/licenses ve vendor klasörü.
+Microsoft Visual C++ app-local runtime: https://learn.microsoft.com/en-us/cpp/windows/deployment-in-visual-cpp
+Model: .models/whisper-small/local-manifest.json; Systran/faster-whisper-small.

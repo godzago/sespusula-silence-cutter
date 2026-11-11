@@ -1,0 +1,10 @@
+SesPusula Portable — Windows 10/11 64 bit
+
+SesPusula.exe dosyasına çift tıkla. Python kurmak gerekmez.
+Alternatif başlatıcı: SesPusula.cmd
+Klasörün tamamını kopyala; yalnızca başlatıcıyı taşıma.
+AI modelleri ve FFmpeg dahildir; normal kullanım internetsizdir.
+.runtime, .models ve vendor klasörlerini silme.
+CapCut projeleri/videolar pakete dahil değildir; diğer PC üzerinde projeyi seç.
+Hata olursa Kendini Test Et.cmd dosyasını çalıştır.
+Mac için ayrı SesPusulaMac projesini kullan.
