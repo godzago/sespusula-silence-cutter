@@ -51,6 +51,14 @@ Possible repeats become markers, never automatic deletions. Speech detection and
 
 ## Installation
 
+### macOS 26 — Apple Silicon build kit
+
+[Download the Mac build kit](https://github.com/godzago/sespusula-silence-cutter/releases/tag/macos26-arm64-v0.8.1-source) — includes the current interface, offline ARM dependencies, and local Whisper model. A SHA-256 checksum file is provided with the ZIP.
+
+**This is a source/build kit, not an already compiled `.app`.** Extract the ZIP on your Mac, use Python 3.11 with Tk, and open `Mac Uygulamasini Olustur.command`. After a successful build, move `Dagitim/arm64/SesPusula.app` to Applications. The built app should not need external Python or Terminal for daily use.
+
+The intended target is native arm64 on macOS 26 or later, including M1–M5 and MacBook Neo. The new Mac package passed 71 shared, packaging, and simulated adapter tests on Windows; the new app has not yet been built or run on macOS. The release is marked as a pre-release for native testing. Turkish instructions and a first-use checklist are included in the ZIP.
+
 ### Existing Windows portable package
 
 Open **`SesPusula.exe`** or **`SesPusula.cmd`** in the complete package. A separate Python installation is not needed. Keep the folder together, including `.runtime`, `.models`, and `vendor`.
@@ -92,7 +100,7 @@ These instructions describe the source requirements. A fresh installation from G
 - Supports normal-speed audio/video, still images, and basic text tracks within its compatibility checks.
 - Speed ramps, reverse playback, compound clips, keyframes, transitions, word-timed captions, and unverified effects can block output.
 - Uses **Silero VAD** for speech detection and **Whisper small** for Turkish transcription on CPU/int8.
-- macOS execution has not been verified. This repository comes from the Windows portable folder.
+- The Mac build kit is available in Releases. Native execution of the new Mac app has not yet been verified; the repository root contains the Windows working sources.
 - Automated project JSON/SRT checks have passed. Those checks do not verify playback, marker/subtitle appearance, or video export inside CapCut.
 
 SesPusula is an independent project and is not affiliated with CapCut.
