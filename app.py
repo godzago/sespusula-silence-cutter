@@ -54,7 +54,7 @@ class App(tk.Tk):
         left=max(0,(self.winfo_screenwidth()-width)//2)
         self.geometry(f'{width}x{height}+{left}+30')
         self.minsize(min(940,width),min(700,height))
-        self.configure(bg='#101621')
+        self.configure(bg='#101214')
         self.project = None
         self.caption_words=[]
         self.caption_cues=[]
@@ -92,58 +92,98 @@ class App(tk.Tk):
     def _style(self):
         style = ttk.Style(self)
         style.theme_use('clam')
-        style.configure('.', background='#101621', foreground='#e8edf6', font=('Segoe UI', 10))
-        style.configure('TFrame', background='#101621')
-        style.configure('TLabel', background='#101621', foreground='#d5dfed')
-        style.configure('Title.TLabel', font=('Segoe UI Semibold', 23), foreground='#f4f8ff')
-        style.configure('Sub.TLabel', foreground='#94a5bb')
-        style.configure('TButton', padding=(13,9), background='#243249', borderwidth=0)
-        style.map('TButton', background=[('active','#344761'),('disabled','#1b2533')], foreground=[('disabled','#75859c')])
-        style.configure('Accent.TButton', background='#33d5c3', foreground='#081b1e', font=('Segoe UI Semibold', 11))
-        style.map('Accent.TButton', background=[('active','#65ebdb'),('disabled','#294b4e')])
-        style.configure('TEntry', fieldbackground='#1d293a', foreground='#f4f8ff', padding=7, insertcolor='white')
-        style.configure('TCombobox', fieldbackground='#1d293a', foreground='#f4f8ff', padding=7)
-        style.map('TCombobox', fieldbackground=[('readonly','#1d293a')], selectbackground=[('readonly','#1d293a')], selectforeground=[('readonly','#f4f8ff')])
-        style.configure('Treeview', background='#172131', fieldbackground='#172131', foreground='#edf3fc', rowheight=31, borderwidth=0)
-        style.configure('Treeview.Heading', background='#25334a', foreground='#dae5f5', padding=8)
-        style.map('Treeview', background=[('selected','#28545c')])
-        style.configure('TProgressbar', background='#33d5c3', troughcolor='#1d293a')
-        style.configure('TNotebook',background='#101621',borderwidth=0)
-        style.configure('TNotebook.Tab',background='#25334a',padding=(12,5))
+        style.configure('.', background='#101214', foreground='#e7edeb', font=('Segoe UI', 10))
+        style.configure('TFrame', background='#101214')
+        style.configure('TLabel', background='#101214', foreground='#cbd4d0')
+        style.configure('Title.TLabel', font=('Segoe UI Semibold', 22), foreground='#f2f6f4')
+        style.configure('Sub.TLabel', foreground='#8e9c96')
+        style.configure('TButton', padding=(12,8), background='#282e33', borderwidth=0)
+        style.map('TButton', background=[('active','#353e44'),('disabled','#1c2125')], foreground=[('disabled','#87958e')])
+        style.configure('Accent.TButton', background='#40d9b0', foreground='#09251c', font=('Segoe UI Semibold', 11))
+        style.map('Accent.TButton', background=[('active','#71e8c9'),('disabled','#243d35')])
+        style.configure('TEntry', fieldbackground='#22272c', foreground='#f2f6f4', padding=7, insertcolor='white')
+        style.configure('TCombobox', fieldbackground='#22272c', foreground='#f2f6f4', padding=7)
+        style.map('TCombobox', fieldbackground=[('readonly','#22272c')], selectbackground=[('readonly','#22272c')], selectforeground=[('readonly','#f2f6f4')])
+        style.configure('Treeview', background='#191d21', fieldbackground='#191d21', foreground='#e7edeb', rowheight=36, borderwidth=0, relief='flat')
+        style.configure('Treeview.Heading', background='#22282d', foreground='#b2bfb8', padding=(10,10), relief='flat', font=('Segoe UI Semibold',9))
+        style.map('Treeview', background=[('selected','#20443f')])
+        style.configure('TProgressbar', background='#40d9b0', troughcolor='#22272c')
+        style.configure('TNotebook',background='#101214',borderwidth=0)
+        style.configure('TNotebook.Tab',background='#22282d',padding=(12,5))
+
+        style.configure('Card.TFrame',background='#191d21')
+        style.configure('Brand.TLabel',foreground='#40d9b0',font=('Segoe UI Semibold',10))
+        style.configure('Badge.TLabel',foreground='#40d9b0',font=('Segoe UI Semibold',9))
+        style.configure('CardSub.TLabel',background='#191d21',foreground='#8e9c96',font=('Segoe UI',9))
+        style.configure('Eyebrow.TLabel',background='#191d21',foreground='#8e9c96',font=('Segoe UI Semibold',9))
+        style.configure('Metric.TLabel',background='#191d21',foreground='#f2f6f4',font=('Segoe UI Semibold',20))
+        style.configure('MetricAccent.TLabel',background='#191d21',foreground='#40d9b0',font=('Segoe UI Semibold',20))
+        style.configure('TCheckbutton',background='#101214',foreground='#cbd4d0',padding=(4,5))
+        style.map('TCheckbutton',background=[('active','#101214')],foreground=[('disabled','#87958e')])
+        style.configure('TCombobox',borderwidth=0,arrowsize=14,arrowcolor='#8e9c96',relief='flat')
+        style.configure('TButton',relief='flat',focusthickness=0)
+        style.configure('TNotebook',tabmargins=(0,0,0,8))
+        style.configure('TNotebook.Tab',padding=(16,9),borderwidth=0)
+        style.map('TNotebook.Tab',background=[('selected','#28352f')],foreground=[('selected','#40d9b0')])
+        style.layout('Treeview',[('Treeview.treearea',{'sticky':'nswe'})])
+        style.configure('Vertical.TScrollbar',background='#353e44',troughcolor='#191d21',borderwidth=0,arrowsize=11)
+        style.configure('Thin.Horizontal.TProgressbar',thickness=3,borderwidth=0)
+        for name in ('TCombobox','Treeview','Treeview.Heading','TNotebook','TNotebook.Tab','Thin.Horizontal.TProgressbar'):
+            style.configure(name,bordercolor='#22282d',lightcolor='#22282d',darkcolor='#22282d')
 
     def _build(self):
-        root = ttk.Frame(self, padding=16)
+        root = ttk.Frame(self, padding=22)
         root.pack(fill='both', expand=True)
-        self.intro_frame=ttk.Frame(root);self.intro_frame.pack(fill='x')
-        ttk.Label(self.intro_frame, text='Konuşma kalsın. Boşluklar gitsin.', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(self.intro_frame, text='Yerel analiz · Tüm katmanlarda eşzamanlı kesim · Orijinal projeyi koruyan kopya', style='Sub.TLabel').pack(anchor='w', pady=(5,12))
-        row = ttk.Frame(root);self.project_row=row;row.pack(fill='x')
-        ttk.Label(row,text='CapCut projesi').pack(anchor='w')
-        r = ttk.Frame(row); r.pack(fill='x',pady=(5,8))
-        self.projects = ttk.Combobox(r,state='readonly'); self.projects.pack(side='left',fill='x',expand=True)
-        self.projects.bind('<<ComboboxSelected>>', self.select_project)
-        self.refresh_btn = ttk.Button(r,text='Yenile',command=self.refresh); self.refresh_btn.pack(side='left',padx=8)
-        self.browse_btn = ttk.Button(r,text='Klasör seç',command=self.browse); self.browse_btn.pack(side='left')
-        self.path_text = tk.StringVar(value='Bir proje seçin.')
-        self.path_label=ttk.Label(row,textvariable=self.path_text,style='Sub.TLabel');self.path_label.pack(anchor='w')
-        ttk.Label(root,text='Ana mikrofon / sessizlik analiz kaynağı',font=('Segoe UI Semibold',10)).pack(anchor='w',pady=(10,5))
-        self.tracks=ttk.Combobox(root,state='readonly');self.tracks.pack(fill='x')
+        self.intro_frame=ttk.Frame(root);self.intro_frame.pack(fill='x',pady=(0,16))
+        ttk.Label(self.intro_frame,text='SESPUSULA',style='Brand.TLabel').pack(anchor='w')
+        title_row=ttk.Frame(self.intro_frame);title_row.pack(fill='x',pady=(4,0))
+        ttk.Label(title_row,text='Daha az boşluk. Daha çok içerik.',style='Title.TLabel').pack(side='left')
+        ttk.Label(title_row,text='●  YEREL & ÇEVRİMDIŞI',style='Badge.TLabel').pack(side='right',padx=(12,0))
+        self.project_row=ttk.Frame(root);self.project_row.pack(fill='x')
+        self.project_row.columnconfigure(0,weight=3,uniform='inputs')
+        self.project_row.columnconfigure(1,weight=2,uniform='inputs')
+        row=ttk.Frame(self.project_row,style='Card.TFrame',padding=16)
+        row.grid(row=0,column=0,sticky='nsew',padx=(0,6))
+        ttk.Label(row,text='01  /  PROJE',style='Eyebrow.TLabel').pack(anchor='w',pady=(0,9))
+        r=ttk.Frame(row,style='Card.TFrame');r.pack(fill='x')
+        self.projects=ttk.Combobox(r,state='readonly');self.projects.pack(side='left',fill='x',expand=True)
+        self.projects.bind('<<ComboboxSelected>>',self.select_project)
+        self.refresh_btn=ttk.Button(r,text='↻',width=3,command=self.refresh);self.refresh_btn.pack(side='left',padx=6)
+        self.browse_btn=ttk.Button(r,text='Klasör seç',command=self.browse);self.browse_btn.pack(side='left')
+        self.path_text=tk.StringVar(value='Başlamak için bir CapCut projesi seçin.')
+        self.path_label=ttk.Label(row,textvariable=self.path_text,style='CardSub.TLabel',wraplength=540)
+        self.path_label.pack(anchor='w',pady=(8,0))
+        row.bind('<Configure>',lambda event:self.path_label.configure(wraplength=max(180,event.width-32)))
+        mic=ttk.Frame(self.project_row,style='Card.TFrame',padding=16)
+        mic.grid(row=0,column=1,sticky='nsew',padx=(6,0))
+        ttk.Label(mic,text='02  /  ANA MİKROFON',style='Eyebrow.TLabel').pack(anchor='w',pady=(0,9))
+        self.tracks=ttk.Combobox(mic,state='readonly');self.tracks.pack(fill='x')
         self.tracks.bind('<<ComboboxSelected>>',lambda _:self.invalidate())
-        mode_row=ttk.Frame(root);mode_row.pack(fill='x',pady=(10,0))
-        ttk.Label(mode_row,text='Otomatik jump cut · Tüm zaman çizelgesi',font=('Segoe UI Semibold',10)).pack(side='left')
+        ttk.Label(mic,text='Kesimler tüm katmanlara birlikte uygulanır.',style='CardSub.TLabel').pack(anchor='w',pady=(8,0))
+        self.metrics_row=ttk.Frame(root);self.metrics_row.pack(fill='x',pady=(12,0))
+        self.metric_vars=[tk.StringVar(value='—') for _ in range(3)]
+        for i,label in enumerate(('KAYIT SÜRESİ','ÇIKARILAN SESSİZLİK','YENİ SÜRE')):
+            self.metrics_row.columnconfigure(i,weight=1,uniform='metrics')
+            card=ttk.Frame(self.metrics_row,style='Card.TFrame',padding=(16,10))
+            card.grid(row=0,column=i,sticky='ew',padx=(0 if i==0 else 6,0 if i==2 else 6))
+            ttk.Label(card,text=label,style='Eyebrow.TLabel').pack(anchor='w')
+            ttk.Label(card,textvariable=self.metric_vars[i],style='Metric.TLabel' if i!=1 else 'MetricAccent.TLabel').pack(anchor='w',pady=(4,0))
+        mode_row=ttk.Frame(root);mode_row.pack(fill='x',pady=(12,0))
+        ttk.Label(mode_row,text='KESİM SEÇENEKLERİ',style='Sub.TLabel').pack(side='left')
         self.transcribe_var=tk.BooleanVar(value=self.preferences.get('transcribe_text',False) is True)
         self.suggest_var=tk.BooleanVar(value=True)
         self.suggest_check=ttk.Checkbutton(mode_row,text='Tekrarları işaretle',variable=self.suggest_var,command=self.update_buttons);self.suggest_check.pack(side='right')
         self.transcribe_check=ttk.Checkbutton(mode_row,text='Türkçe metin çıkar',variable=self.transcribe_var,command=self.invalidate);self.transcribe_check.pack(side='right',padx=(0,12))
         self.jump_cut_status=tk.StringVar(value='Ana sesteki sessizlik otomatik kesilir · Yeni konuşmadan önce 100 ms pay · Tekrarlar yalnızca işaretlenir.')
-        ttk.Label(root,textvariable=self.jump_cut_status,style='Sub.TLabel',wraplength=1000).pack(anchor='w',pady=(7,0))
+        self.rule_label=ttk.Label(root,textvariable=self.jump_cut_status,style='Sub.TLabel',wraplength=1000)
+        self.rule_label.pack(anchor='w',pady=(6,0))
         self.compat_text=tk.StringVar(value='')
-        self.compat_label=ttk.Label(root,textvariable=self.compat_text,wraplength=1030,foreground='#edc780');self.compat_label.pack(anchor='w',pady=(8,8))
-        body=ttk.Frame(root)
-        self.canvas=tk.Canvas(body,height=33,bg='#172131',highlightthickness=0)
+        self.compat_label=ttk.Label(root,textvariable=self.compat_text,wraplength=1030,foreground='#bfc9c3');self.compat_label.pack(anchor='w',pady=(8,8))
+        body=ttk.Frame(root,style='Card.TFrame',padding=12)
+        self.canvas=tk.Canvas(body,height=33,bg='#191d21',highlightthickness=0)
         self.canvas.pack(fill='x',pady=(0,8));self.canvas.bind('<Configure>',lambda _:self.draw())
         self.notebook=ttk.Notebook(body);self.notebook.pack(fill='both',expand=True)
-        table=ttk.Frame(self.notebook);self.notebook.add(table,text='Kesimleri kontrol et')
+        table=ttk.Frame(self.notebook);self.notebook.add(table,text='Kesim listesi')
         text_tab=ttk.Frame(self.notebook);self.notebook.add(text_tab,text='Türkçe metin')
         text_actions=ttk.Frame(text_tab);text_actions.pack(fill='x',pady=(0,4))
         self.transcript_listen_btn=ttk.Button(text_actions,text='Seçileni dinle',command=self.listen_transcript);self.transcript_listen_btn.pack(side='left')
@@ -151,20 +191,20 @@ class App(tk.Tk):
         self.transcript_status=tk.StringVar(value='Cümleye tıkla veya metinden bir bölüm seç.')
         ttk.Label(text_actions,textvariable=self.transcript_status,style='Sub.TLabel').pack(side='left',padx=8)
         text_body=ttk.Frame(text_tab);text_body.pack(fill='both',expand=True)
-        self.transcript=tk.Text(text_body,height=5,wrap='word',bg='#172131',fg='#edf3fc',font=('Segoe UI',11),borderwidth=0,padx=12,pady=8,state='disabled',exportselection=False)
+        self.transcript=tk.Text(text_body,height=5,wrap='word',bg='#191d21',fg='#e7edeb',font=('Segoe UI',11),borderwidth=0,padx=12,pady=8,state='disabled',exportselection=False)
         self.transcript.pack(side='left',fill='both',expand=True)
         text_scroll=ttk.Scrollbar(text_body,command=self.transcript.yview);text_scroll.pack(side='right',fill='y');self.transcript.configure(yscrollcommand=text_scroll.set)
-        self.transcript.tag_configure('timestamp',foreground='#82e0d0')
-        self.transcript.tag_configure('chosen',background='#28545c')
+        self.transcript.tag_configure('timestamp',foreground='#40d9b0')
+        self.transcript.tag_configure('chosen',background='#20443f')
         self.transcript.bind('<ButtonRelease-1>',self.select_transcript)
         self.transcript.bind('<KeyRelease>',self.select_transcript)
         columns=('number','kind','decision','start','end','duration')
         self.tree=ttk.Treeview(table,columns=columns,show='headings',selectmode='browse',height=5)
         for col,label,width in [('number','#',45),('kind','Tür',115),('decision','İşlem',145),('start','Başlangıç',155),('end','Bitiş',155),('duration','Süre',100)]:
             self.tree.heading(col,text=label);self.tree.column(col,width=width,anchor='center',stretch=col not in ('number','decision'))
-        self.tree.tag_configure('correct',foreground='#82e0b0')
-        self.tree.tag_configure('wrong',foreground='#f4a690')
-        self.tree.tag_configure('proposal',foreground='#edc780')
+        self.tree.tag_configure('correct',foreground='#40d9b0')
+        self.tree.tag_configure('wrong',foreground='#9aa9a1')
+        self.tree.tag_configure('proposal',foreground='#bfc9c3')
         self.tree.pack(side='left',fill='both',expand=True)
         scroll=ttk.Scrollbar(table,orient='vertical',command=self.tree.yview);scroll.pack(side='right',fill='y');self.tree.configure(yscrollcommand=scroll.set)
         self.tree.bind('<space>',lambda _:self.toggle_selected())
@@ -183,9 +223,9 @@ class App(tk.Tk):
         self.summary=tk.StringVar(value='Önce projeyi ve konuşma katmanını seçin.')
         ttk.Label(tail,textvariable=self.summary,font=('Segoe UI Semibold',10)).pack(anchor='w',pady=(10,8))
         actions=ttk.Frame(tail);actions.pack(fill='x')
-        self.analyze_btn=ttk.Button(actions,text='Jump cut analiz et',style='Accent.TButton',command=self.start_analysis);self.analyze_btn.pack(side='left')
-        self.listen_btn=ttk.Button(actions,text='Dinle',command=lambda:self.listen(False));self.listen_btn.pack(side='left',padx=8)
-        self.after_btn=ttk.Button(actions,text='Kesilmişini dinle',command=lambda:self.listen(True));self.after_btn.pack(side='left')
+        self.analyze_btn=ttk.Button(actions,text='Analiz et',style='Accent.TButton',command=self.start_analysis);self.analyze_btn.pack(side='left')
+        self.listen_btn=ttk.Button(review_row,text='Dinle',command=lambda:self.listen(False));self.listen_btn.pack(side='left',padx=8)
+        self.after_btn=ttk.Button(review_row,text='Kesilmişini dinle',command=lambda:self.listen(True));self.after_btn.pack(side='left')
         self.caption_btn=ttk.Button(actions,text='Otomatik altyazı',command=self.start_captions);self.caption_btn.pack(side='left',padx=8)
         self.caption_toggle_var=tk.BooleanVar(value=False)
         self.caption_toggle=ttk.Checkbutton(actions,text='Ekle',variable=self.caption_toggle_var,command=self.toggle_captions);self.caption_toggle.pack(side='left')
@@ -197,23 +237,21 @@ class App(tk.Tk):
         status_label.grid(row=0,column=0,sticky='ew')
         status_label.bind('<Configure>',lambda event:status_label.configure(wraplength=max(1,min(850,event.width))))
         self.cancel_btn=ttk.Button(footer,text='İptal',command=lambda:self.cancel_event.set());self.cancel_btn.grid(row=0,column=1,sticky='e',padx=(8,0))
-        self.progress=ttk.Progressbar(tail,mode='indeterminate');self.progress.pack(fill='x',pady=(7,0))
+        self.progress=ttk.Progressbar(tail,mode='indeterminate',style='Thin.Horizontal.TProgressbar');self.progress.pack(fill='x',pady=(7,0))
         body.pack(fill='both',expand=True)
         self.update_buttons()
 
     def fit_header(self,event):
         if event.widget is not self:return
-        # Keep the editable content and actions available on short windows.
-        if event.height<800:
-            if self.intro_frame.winfo_manager():self.intro_frame.pack_forget()
-            if self.path_label.winfo_manager():self.path_label.pack_forget()
-            if self.canvas.winfo_manager():self.canvas.pack_forget()
+        compact=event.height<800
+        if compact:
+            for widget in (self.intro_frame,self.rule_label,self.canvas):
+                if widget.winfo_manager():widget.pack_forget()
         else:
-            if not self.intro_frame.winfo_manager():self.intro_frame.pack(fill='x',before=self.project_row)
-            if not self.path_label.winfo_manager():self.path_label.pack(anchor='w')
+            if not self.intro_frame.winfo_manager():self.intro_frame.pack(fill='x',pady=(0,16),before=self.project_row)
+            if not self.rule_label.winfo_manager():self.rule_label.pack(anchor='w',pady=(6,0),before=self.compat_label)
             if not self.canvas.winfo_manager():self.canvas.pack(fill='x',pady=(0,8),before=self.notebook)
         self.selection_changed()
-
 
     def refresh(self):
         try:
@@ -269,6 +307,7 @@ class App(tk.Tk):
         if self.busy:return
         self.cuts=[];self.enabled=set();self.analyzed_track=None;self.review_session=None;self.export_error=None
         self.caption_words=[];self.caption_cues=[];self.caption_signature=None
+        self.update_metrics()
         self.jump_cut_status.set('Tüm zaman çizelgesi · Yeni konuşmadan önce 100 ms pay · Sessizlikler onaysız kesilir.')
         if hasattr(self,'tree'):
             self.tree.delete(*self.tree.get_children());self.summary.set('Ayarlar hazır. Analiz et düğmesine bas.');self.set_transcript('');self.draw();self.update_buttons()
@@ -346,7 +385,7 @@ class App(tk.Tk):
         controls=ttk.Frame(box);controls.pack(side='bottom',fill='x')
         enabled=tk.BooleanVar(value=True)
         ttk.Checkbutton(controls,text='CapCut kopyasına altyazı ekle',variable=enabled).pack(anchor='w',pady=6)
-        editor=tk.Text(controls,height=3,wrap='word',bg='#172131',fg='#edf3fc',insertbackground='white',font=('Segoe UI',11))
+        editor=tk.Text(controls,height=3,wrap='word',bg='#191d21',fg='#e7edeb',insertbackground='white',font=('Segoe UI',11))
         editor.pack(fill='x',pady=(0,6))
         row=ttk.Frame(controls);row.pack(fill='x')
         table=ttk.Treeview(box,columns=('start','end','text'),show='headings',selectmode='browse',height=7)
@@ -552,6 +591,16 @@ class App(tk.Tk):
             self.tree.selection_set(row);self.tree.focus(row);self.tree.see(row)
         self.update_summary();self.draw();self.selection_changed()
 
+    def update_metrics(self):
+        if not hasattr(self,'metric_vars'):return
+        total=self.project.duration if self.project else None
+        removed=0
+        if self.review_session:
+            try:removed=sum(c.duration for c in self.review_session.selected_cuts())
+            except UserError:pass
+        values=(clock(total),clock(removed),clock(max(0,total-removed))) if total is not None else ('—','—','—')
+        for var,value in zip(self.metric_vars,values):var.set(value)
+
     def update_summary(self):
         if not self.project or not self.review_session:return
         try:
@@ -559,6 +608,7 @@ class App(tk.Tk):
         except UserError as exc:
             removed=0;self.export_error=str(exc)
         markers=sum(c.get('marker_only',False) for c in self.review_session.candidates)
+        self.update_metrics()
         self.summary.set(self.export_error or f'{len(self.enabled)} otomatik kesim · {markers} tekrar işareti · Kazanç: {removed/US:.2f} sn · Yeni süre: {clock(self.project.duration-removed)}')
         self.update_buttons()
 
@@ -577,13 +627,13 @@ class App(tk.Tk):
         self.canvas.delete('all')
         if not self.project:return
         w=max(1,self.canvas.winfo_width());dur=self.project.duration
-        self.canvas.create_rectangle(0,12,w,31,fill='#2b5960',outline='')
+        self.canvas.create_rectangle(0,12,w,31,fill='#28352f',outline='')
         for i,c in enumerate(self.cuts):
             marker=self.review_session and self.review_session.candidates[i].get('marker_only')
-            color='#f28f73' if i in self.enabled else ('#edc780' if marker else '#536279')
+            color='#40d9b0' if i in self.enabled else ('#bfc9c3' if marker else '#57635d')
             self.canvas.create_rectangle(c.start/dur*w,12,c.end/dur*w,31,fill=color,outline='')
-        self.canvas.create_text(5,3,text='0:00',fill='#95a6bc',anchor='nw',font=('Segoe UI',8))
-        self.canvas.create_text(w-5,3,text=clock(dur),fill='#95a6bc',anchor='ne',font=('Segoe UI',8))
+        self.canvas.create_text(5,3,text='0:00',fill='#8e9c96',anchor='nw',font=('Segoe UI',8))
+        self.canvas.create_text(w-5,3,text=clock(dur),fill='#8e9c96',anchor='ne',font=('Segoe UI',8))
 
     def toggle_selected(self):
         rows=self.tree.selection()
@@ -685,6 +735,9 @@ class App(tk.Tk):
         if not hasattr(self,'copy_btn'):return
         self.analyze_btn['state']='normal' if self.project and self.track_ids and not self.busy else 'disabled'
         ready=self.captions_ready()
+        copy_primary=bool(self.review_session or self.caption_enabled or ready)
+        self.analyze_btn.configure(style='TButton' if copy_primary else 'Accent.TButton')
+        self.copy_btn.configure(style='Accent.TButton' if copy_primary else 'TButton')
         self.copy_btn['state']='normal' if self.project and self.track_ids and (self.review_session or self.caption_enabled or ready) and not self.busy else 'disabled'
         self.caption_btn['state']='normal' if self.project and self.track_ids and not self.busy else 'disabled'
         self.caption_btn['text']=('Altyazı ✓' if ready else 'Altyazı · otomatik') if self.caption_enabled else 'Otomatik altyazı'

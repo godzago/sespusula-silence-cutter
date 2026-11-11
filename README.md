@@ -99,7 +99,7 @@ SesPusula is an independent project and is not affiliated with CapCut.
 
 ## Tests
 
-The current suite has **50 tests**, covering timeline cuts, project copies, subtitles, repeat markers, review state, and interface behavior.
+The current suite has **51 tests**, covering timeline cuts, project copies, subtitles, repeat markers, review state, and interface behavior.
 
 Existing portable environment:
 
@@ -138,3 +138,4 @@ For bug reports, include the application version, CapCut version, and error mess
 Third-party notices are in [Lisanslar](Lisanslar/). A license for the application's own source code has not been selected yet.
 
 [Turkish usage guide](docs/README.tr.md)
+

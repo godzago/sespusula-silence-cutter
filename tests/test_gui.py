@@ -48,6 +48,18 @@ class GuiTests(unittest.TestCase):
         labels=[w.cget('text') for w in self.descendants(self.app) if w.winfo_class()=='TLabel']
         self.assertNotIn('Başlangıç (sn)',labels);self.assertNotIn('Bitiş (sn)',labels)
 
+    def test_summary_cards_follow_selected_cuts_and_project_reset(self):
+        self.app.review_session=ReviewSession(self.app.project,2,self.app.get_settings(),[Cut(US,3*US)],self.root/'reviews')
+        self.app.cuts=self.app.review_session.cuts;self.app.enabled=self.app.review_session.enabled
+        self.app.populate()
+        self.assertEqual([v.get() for v in self.app.metric_vars],['00:01:00.000','00:00:02.000','00:00:58.000'])
+        self.assertEqual(self.app.copy_btn.cget('style'),'Accent.TButton')
+        self.app.mark_selected('wrong')
+        self.assertEqual([v.get() for v in self.app.metric_vars],['00:01:00.000','00:00:00.000','00:01:00.000'])
+        self.app.invalidate()
+        self.assertEqual(self.app.analyze_btn.cget('style'),'Accent.TButton')
+        self.assertEqual(self.app.metric_vars[1].get(),'00:00:00.000')
+
     def test_prealigned_project_analysis_needs_no_sync_step(self):
         original=self.app.project.data.copy()
         result=AnalysisResult([Cut(2*US,3*US)],[],[],{'engine':'test'},{})
