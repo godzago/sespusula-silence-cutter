@@ -55,6 +55,8 @@ Possible repeats become markers, never automatic deletions. Speech detection and
 
 [Download the Mac build kit](https://github.com/godzago/sespusula-silence-cutter/releases/tag/macos26-arm64-v0.8.1-source) — includes the current interface, offline ARM dependencies, and local Whisper model. A SHA-256 checksum file is provided with the ZIP.
 
+**Mac build fix:** after extracting the original kit, download [the small installation fix](https://github.com/godzago/sespusula-silence-cutter/releases/download/macos26-arm64-v0.8.1-source/SesPusula-Mac-kurulum-duzeltmesi.zip), extract it, and open `SesPusula Mac Duzelt.command`. It backs up four source/test files, fixes linked-folder path handling, and restarts the build. If a test still fails, the actual error opens automatically in TextEdit. [Details](docs/mac/INSTALLATION-FIX.md).
+
 **This is a source/build kit, not an already compiled `.app`.** Extract the ZIP on your Mac, use Python 3.11 with Tk, and open `Mac Uygulamasini Olustur.command`. After a successful build, move `Dagitim/arm64/SesPusula.app` to Applications. The built app should not need external Python or Terminal for daily use.
 
 The intended target is native arm64 on macOS 26 or later, including M1–M5 and MacBook Neo. The new Mac package passed 71 shared, packaging, and simulated adapter tests on Windows; the new app has not yet been built or run on macOS. The release is marked as a pre-release for native testing. Turkish instructions and a first-use checklist are included in the ZIP.

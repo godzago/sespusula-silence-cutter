@@ -1,0 +1,1553 @@
+--- a/silence_core.py
++++ b/silence_core.py
+@@ -1,724 +1,724 @@
+-"""Offline CapCut timeline analysis. All editing is performed on a new copy."""
+-from __future__ import annotations
+-
+-import copy
+-import hashlib
+-import json
+-import math
+-import os
+-from pathlib import Path
+-import re
+-import shutil
+-import subprocess
+-import tempfile
+-import threading
+-import time
+-import uuid
+-from bisect import bisect_left, bisect_right
+-from dataclasses import dataclass
+-from typing import Callable
+-from platform_support import (application_home,default_capcut_index,capcut_indexes,
+-                              ffmpeg_path,capcut_is_running,VERSION)
+-
+-HOME = Path.home()
+-APP = application_home()
+-DEFAULT_INDEX = default_capcut_index()
+-US = 1_000_000
+-CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+-
+-
+-class UserError(Exception):
+-    pass
+-
+-
+-class Cancelled(UserError):
+-    pass
+-
+-
+-def load_json(path: Path) -> dict:
+-    try:
+-        value = json.loads(path.read_text(encoding='utf-8-sig'))
+-    except (OSError, UnicodeError, ValueError) as exc:
+-        raise UserError(f'JSON okunamadı: {path}\n{exc}') from exc
+-    if not isinstance(value, dict):
+-        raise UserError(f'Proje biçimi tanınmadı: {path}')
+-    return value
+-
+-
+-def digest(path: Path) -> str:
+-    return hashlib.sha256(path.read_bytes()).hexdigest()
+-
+-
+-def atomic_json(path: Path, data: dict) -> None:
+-    fd, name = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
+-    try:
+-        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
+-            json.dump(data, stream, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+-            stream.flush()
+-            os.fsync(stream.fileno())
+-        # Windows readers/antivirus can briefly hold a handle without delete sharing.
+-        for attempt in range(8):
+-            try:
+-                os.replace(name, path)
+-                break
+-            except PermissionError:
+-                if attempt==7:
+-                    raise
+-                time.sleep(.01*(attempt+1))
+-    finally:
+-        Path(name).unlink(missing_ok=True)
+-
+-
+-def uid() -> str:
+-    return str(uuid.uuid4()).upper()
+-
+-
+-def project_content_file(folder: Path) -> Path:
+-    """Preserve the saved timeline filename on both platforms."""
+-    existing = [folder / name for name in ('draft_content.json', 'draft_info.json') if (folder / name).is_file()]
+-    if len(existing) != 1:
+-        raise UserError(f'Klasörde tek bir draft_content.json veya draft_info.json olmalı: {folder}')
+-    return existing[0]
+-
+-
+-def has_project_content(folder: Path) -> bool:
+-    return any((folder / name).is_file() for name in ('draft_content.json', 'draft_info.json'))
+-
+-
+-def discover_projects(index: Path | None = None) -> list[tuple[str, Path]]:
+-    """Follow registered paths; the project storage can be on another drive."""
+-    found: dict[Path, str] = {}
+-    indexes=[index] if index is not None else capcut_indexes(HOME)
+-    roots = {p.parent for p in indexes}
+-    for candidate_index in indexes:
+-        if candidate_index.is_file():
+-            for item in load_json(candidate_index).get('all_draft_store', []):
+-                if item.get('draft_root_path'):
+-                    roots.add(Path(item['draft_root_path']))
+-                p = Path(item.get('draft_fold_path', ''))
+-                if not item.get('tm_draft_removed') and has_project_content(p):
+-                    found[p] = item.get('draft_name') or p.name
+-    for root in roots:
+-        if root.is_dir():
+-            for p in root.iterdir():
+-                if p.is_dir() and not p.name.startswith('.') and has_project_content(p):
+-                    try:
+-                        meta = load_json(p / 'draft_meta_info.json')
+-                        if not meta.get('tm_draft_removed'):
+-                            found[p] = meta.get('draft_name') or p.name
+-                    except UserError:
+-                        continue
+-    return sorted(((n, p) for p, n in found.items()), key=lambda x: x[0].casefold())
+-
+-
+-def timerange(value: dict | None) -> tuple[int, int]:
+-    if not isinstance(value, dict):
+-        raise UserError('Eksik zaman aralığı.')
+-    a, duration = value.get('start'), value.get('duration')
+-    if type(a) is not int or type(duration) is not int or a < 0 or duration <= 0:
+-        raise UserError('Geçersiz klip zaman aralığı.')
+-    return a, a + duration
+-
+-
+-@dataclass(frozen=True, order=True)
+-class Cut:
+-    start: int
+-    end: int
+-
+-    @property
+-    def duration(self) -> int:
+-        return self.end - self.start
+-
+-
+-@dataclass(frozen=True)
+-class Settings:
+-    threshold: float = -35.0
+-    minimum: float = 0.5
+-    padding: float = 0.1
+-    start: float = 0.0
+-    end: float | None = None
+-    maximum: float | None = None
+-    lead_padding: float | None = None
+-    minimum_cut: float = 0.08
+-    auto_jump_cut: bool = False
+-    next_speech_padding: float | None = None
+-
+-    def validate(self, duration: int) -> tuple[int, int]:
+-        if type(self.auto_jump_cut) is not bool:
+-            raise UserError('Otomatik jump cut seçimi geçersiz.')
+-        if self.auto_jump_cut:
+-            if type(duration) is not int or duration<=0:
+-                raise UserError('Zaman çizelgesi süresi geçersiz.')
+-            if self.next_speech_padding is not None and (not isinstance(self.next_speech_padding,(int,float)) or
+-                    not math.isfinite(self.next_speech_padding) or not 0<=self.next_speech_padding<=5):
+-                raise UserError('Yeni konuşma öncesi pay 0–5 saniye arasında olmalı.')
+-            return 0,duration
+-        values = [self.threshold, self.minimum, self.padding, self.start]
+-        values.append(self.minimum_cut)
+-        if self.lead_padding is not None:
+-            values.append(self.lead_padding)
+-        if self.end is not None:
+-            values.append(self.end)
+-        if self.maximum is not None:
+-            values.append(self.maximum)
+-        if not all(math.isfinite(x) for x in values):
+-            raise UserError('Ayarlar sonlu sayılar olmalı.')
+-        if not -100 <= self.threshold <= -1:
+-            raise UserError('Ses eşiği −100 ile −1 dB arasında olmalı.')
+-        if not 0.02 <= self.minimum <= 60 or not 0 <= self.padding <= 5:
+-            raise UserError('Minimum sessizlik 0,02–60 sn; koruma payı 0–5 sn olmalı.')
+-        if not 0 <= self.minimum_cut <= 5 or (self.lead_padding is not None and not 0 <= self.lead_padding <= 5):
+-            raise UserError('Kelime başı payı ve en kısa kesim 0–5 sn olmalı.')
+-        if self.maximum is not None and self.maximum < self.minimum:
+-            raise UserError('En uzun boşluk, en kısa boşluktan küçük olamaz.')
+-        a = 0 if self.auto_jump_cut else round(self.start * US)
+-        b = duration if self.auto_jump_cut or self.end is None else round(self.end * US)
+-        if not 0 <= a < b <= duration:
+-            raise UserError('İşlem aralığı proje içinde olmalı; bitiş başlangıçtan büyük olmalı.')
+-        return a, b
+-
+-    def accepts_silence(self, duration: int) -> bool:
+-        return (duration >= round(self.minimum * US) and
+-                (self.maximum is None or duration <= round(self.maximum * US)))
+-
+-
+-def silence_cut(start: int, end: int, settings: Settings, fps: float) -> Cut | None:
+-    """Keep the previous word's tail and the next word's onset; quantize inward."""
+-    if not settings.accepts_silence(end-start):
+-        return None
+-    lead = settings.padding if settings.lead_padding is None else settings.lead_padding
+-    a = round(math.ceil((start+settings.padding*US)*fps/US-1e-8)*US/fps)
+-    b = round(math.floor((end-lead*US)*fps/US+1e-8)*US/fps)
+-    if b > a and b-a >= round(settings.minimum_cut*US):
+-        return Cut(a,b)
+-    return None
+-
+-
+-class Project:
+-    def __init__(self, folder: Path):
+-        self.folder = Path(folder).resolve()
+-        if self.folder.is_file():
+-            self.folder = self.folder.parent
+-        self.file = project_content_file(self.folder)
+-        self.data = load_json(self.file)
+-        timeline_id=self.data.get('id')
+-        if (not isinstance(timeline_id,str) or not timeline_id.strip() or timeline_id in ('.','..') or
+-            any(c in timeline_id for c in '/\\:') or timeline_id.rstrip(' .')!=timeline_id):
+-            raise UserError('Zaman çizelgesi kimliği geçersiz; güvenli proje klasörü oluşturulamaz.')
+-        self.meta = load_json(self.folder / 'draft_meta_info.json')
+-        if self.data.get('version') != 360000:
+-            raise UserError('Bu taslak sürümü doğrulanmadı. Desteklenen JSON sürümü: 360000.')
+-        if not isinstance(self.data.get('tracks'), list) or not isinstance(self.data.get('materials'), dict):
+-            raise UserError('CapCut zaman çizelgesi bulunamadı.')
+-        self.duration = self.data.get('duration')
+-        self.fps = self.data.get('fps')
+-        if type(self.duration) is not int or self.duration <= 0:
+-            raise UserError('Proje boş veya süresi geçersiz.')
+-        if not isinstance(self.fps, (int, float)) or not math.isfinite(self.fps) or not 1 <= self.fps <= 240:
+-            raise UserError('Geçersiz proje kare hızı.')
+-        self.manifest = self.folder / 'Timelines/project.json'
+-        self.content_files = [self.file]
+-        if self.manifest.exists():
+-            manifest = load_json(self.manifest)
+-            timelines = [t for t in manifest.get('timelines', []) if not t.get('is_marked_delete')]
+-            if len(timelines) != 1 or manifest.get('main_timeline_id') != self.data.get('id'):
+-                raise UserError('İlk sürüm yalnızca tek zaman çizelgeli projeleri destekliyor.')
+-            mirror = self.folder / 'Timelines' / self.data['id'] / self.file.name
+-            if not mirror.exists() or load_json(mirror) != self.data:
+-                raise UserError('Ana taslak ile zaman çizelgesi kopyası uyuşmuyor. CapCut’ta kaydedip kapatın.')
+-            self.content_files.append(mirror)
+-        files = [*self.content_files, self.folder / 'draft_meta_info.json']
+-        if self.manifest.exists():
+-            files.append(self.manifest)
+-        self.hashes = {p: digest(p) for p in files}
+-        self.materials = {m['id']: (kind, m) for kind, entries in self.data['materials'].items()
+-                          if isinstance(entries, list) for m in entries if isinstance(m, dict) and m.get('id')}
+-        self.media_stamps: dict[Path, tuple[int, int]] = {}
+-        for track in self.data['tracks']:
+-            for seg in track.get('segments', []):
+-                timerange(seg.get('target_timerange'))
+-
+-    @property
+-    def name(self) -> str:
+-        return self.meta.get('draft_name') or self.folder.name
+-
+-    def resolve_media(self, material: dict) -> Path:
+-        raw = material.get('path', '')
+-        if not isinstance(raw, str) or not raw:
+-            raise UserError('Klip için yerel medya yolu bulunamadı.')
+-        raw = re.sub(r'^##_draftpath_placeholder_[^/\\]+_##', str(self.folder).replace('\\', '/'), raw)
+-        if '://' in raw or '##_draftpath_' in raw:
+-            raise UserError('Yalnızca indirilen, yerel medya destekleniyor.')
+-        path = Path(raw)
+-        if not path.is_absolute():
+-            path = self.folder / path
+-        path = path.resolve()
+-        if not path.is_file():
+-            raise UserError(f'Medya bulunamadı: {path}')
+-        return path
+-
+-    def watch_media(self, path: Path) -> None:
+-        stat = path.stat()
+-        self.media_stamps.setdefault(path, (stat.st_size, stat.st_mtime_ns))
+-
+-    def assert_unchanged(self) -> None:
+-        for path, expected in self.hashes.items():
+-            if not path.is_file() or digest(path) != expected:
+-                raise UserError('Proje analizden sonra değişti. Projeyi yeniden yükleyip analiz edin.')
+-        for path, expected in self.media_stamps.items():
+-            if not path.is_file() or (path.stat().st_size, path.stat().st_mtime_ns) != expected:
+-                raise UserError(f'Medya analizden sonra değişti: {path.name}')
+-
+-    def sources(self) -> list[tuple[str, int]]:
+-        result = []
+-        for i, track in enumerate(self.data['tracks']):
+-            if track.get('type') not in ('audio', 'video'):
+-                continue
+-            names = []
+-            for seg in track.get('segments', []):
+-                kind, m = self.materials.get(seg.get('material_id'), ('', {}))
+-                if kind == 'audios' or (kind == 'videos' and m.get('type') == 'video' and m.get('has_audio', True)):
+-                    name = m.get('name') or m.get('material_name') or Path(m.get('path', '')).name
+-                    if name and name not in names:
+-                        names.append(name)
+-            if names:
+-                title = track.get('name') or ('Ses' if track['type'] == 'audio' else 'Video sesi')
+-                result.append((f'{i+1}. {title} · {", ".join(names)[:110]}', i))
+-        return result
+-
+-    def compatibility(self) -> list[str]:
+-        issues: set[str] = set()
+-        if any(self.meta.get(k) for k in ('cloud_draft_sync', 'draft_is_cloud_temp_draft')):
+-            issues.add('Buluta bağlı proje: önce yerel bir kopya oluşturun.')
+-        if self.data.get('relationships') or self.data.get('group_container'):
+-            issues.add('Klip grupları/bağlantıları henüz desteklenmiyor.')
+-        if self.data.get('time_marks') is not None:
+-            from timeline_markers import validate_time_marks
+-            try:validate_time_marks(self.data['time_marks'],self.duration)
+-            except UserError as exc:issues.add(str(exc))
+-        if self.data.get('keyframe_graph_list') or any((self.data.get('keyframes') or {}).values()):
+-            issues.add('Genel anahtar kareler henüz desteklenmiyor.')
+-        for ti, track in enumerate(self.data['tracks']):
+-            if track.get('type') not in ('audio', 'video', 'text'):
+-                issues.add(f'{ti+1}. katman türü desteklenmiyor: {track.get("type")}')
+-            for seg in track.get('segments', []):
+-                kind, material = self.materials.get(seg.get('material_id'), ('', {}))
+-                if kind not in ('videos', 'audios', 'texts') or material.get('type') == 'draft':
+-                    issues.add(f'{ti+1}. katmanda birleşik/eksik/desteklenmeyen materyal var.')
+-                if seg.get('speed', 1) != 1 or seg.get('reverse') or seg.get('is_loop'):
+-                    issues.add(f'{ti+1}. katmanda hız değişimi, ters oynatma veya döngü var.')
+-                if seg.get('common_keyframes') or seg.get('keyframe_refs') or seg.get('lyric_keyframes'):
+-                    issues.add(f'{ti+1}. katmanda anahtar kare var.')
+-                if seg.get('group_id') or seg.get('caption_info') or (seg.get('responsive_layout') or {}).get('enable'):
+-                    issues.add(f'{ti+1}. katmanda bağlı/dinamik yerleşim var.')
+-                if (seg.get('render_timerange') or {}).get('duration', 0):
+-                    issues.add(f'{ti+1}. katmanda özel render aralığı var.')
+-                if kind == 'texts':
+-                    if material.get('text_to_audio_ids') or material.get('relevance_segment') or material.get('is_lyric_effect'):
+-                        issues.add(f'{ti+1}. katmanda bağlı/animasyonlu altyazı var.')
+-                    for key in ('words', 'current_words'):
+-                        words = material.get(key) or {}
+-                        if words.get('start_time') or words.get('end_time'):
+-                            issues.add(f'{ti+1}. katmanda kelime zamanlamalı altyazı var; basit metne dönüştürün.')
+-                for ref in seg.get('extra_material_refs', []):
+-                    rk, rm = self.materials.get(ref, ('unknown', {}))
+-                    safe = rk in ('canvases', 'sound_channel_mappings', 'material_colors', 'placeholder_infos', 'hsl', 'common_mask')
+-                    safe |= rk == 'speeds' and rm.get('speed', 1) == 1 and not rm.get('curve_speed')
+-                    safe |= rk == 'material_animations' and not rm.get('animations')
+-                    safe |= rk == 'audio_fades' and not rm.get('fade_in_duration') and not rm.get('fade_out_duration')
+-                    safe |= rk == 'beats' and not rm.get('enable_ai_beats') and not rm.get('user_beats')
+-                    safe |= rk == 'vocal_separations' and rm.get('choice', 0) in (0, None) and not rm.get('production_path')
+-                    if not safe:
+-                        issues.add(f'{ti+1}. katmanda doğrulanmamış efekt/bağlantı: {rk}.')
+-                if kind in ('audios', 'videos'):
+-                    try:
+-                        path = self.resolve_media(material)
+-                        self.watch_media(path)
+-                        if material.get('type') != 'photo':
+-                            sa, sb = timerange(seg.get('source_timerange'))
+-                            a, b = timerange(seg['target_timerange'])
+-                            if abs((sb-sa)-(b-a)) > 2:
+-                                issues.add(f'{ti+1}. katmanda kaynak/hedef süre eşleşmiyor.')
+-                    except UserError as exc:
+-                        issues.add(str(exc))
+-        return sorted(issues)
+-
+-
+-def ffmpeg_executable() -> str:
+-    exe = ffmpeg_path(APP)
+-    if not exe:
+-        raise UserError('FFmpeg bulunamadı. Kurulum yönergelerine bakın.')
+-    return str(exe)
+-
+-
+-def run_media(args: list[str], cancel: threading.Event, expected_duration: int | None = None) -> str:
+-    if cancel.is_set():
+-        raise Cancelled('İşlem iptal edildi.')
+-    with tempfile.TemporaryFile() as log, tempfile.TemporaryFile() as progress:
+-        proc = subprocess.Popen([ffmpeg_executable(), '-nostdin', '-hide_banner', '-progress', 'pipe:1', *args],
+-                                stdin=subprocess.DEVNULL, stdout=progress, stderr=log,
+-                                creationflags=CREATE_NO_WINDOW)
+-        try:
+-            while proc.poll() is None:
+-                if cancel.wait(0.1):
+-                    raise Cancelled('İşlem iptal edildi.')
+-            log.seek(0, 2)
+-            if log.tell() > 32 * 1024 * 1024:
+-                raise UserError('Ses analiz günlüğü çok büyük. Daha kısa bir aralık seçin.')
+-            log.seek(0)
+-            output = log.read().decode('utf-8', 'replace')
+-            if proc.returncode:
+-                raise UserError('Medya okunamadı:\n' + output[-1600:])
+-            if expected_duration is not None:
+-                progress.seek(0)
+-                elapsed = re.findall(rb'out_time_us=(\d+)', progress.read())
+-                if not elapsed or int(elapsed[-1]) < expected_duration-50_000:
+-                    raise UserError('Ses dosyası zaman çizelgesindeki aralıktan kısa veya çözümlenemedi. Medyayı kontrol edin.')
+-            return output
+-        finally:
+-            if proc.poll() is None:
+-                proc.kill()
+-            proc.wait()
+-
+-
+-def parse_silences(log: str, duration: int) -> list[Cut]:
+-    result = []
+-    pending = None
+-    for event, raw in re.findall(r'silence_(start|end):\s*([-+0-9.eE]+)', log):
+-        value = min(duration, max(0, round(float(raw) * US)))
+-        if event == 'start':
+-            pending = value
+-        elif pending is not None:
+-            if value > pending:
+-                result.append(Cut(pending, value))
+-            pending = None
+-    if pending is not None and pending < duration:
+-        result.append(Cut(pending, duration))
+-    return result
+-
+-
+-@dataclass(frozen=True)
+-class AnalysisClip:
+-    path: Path
+-    source_start: int
+-    start: int
+-    end: int
+-
+-
+-def analysis_clips(project: Project, track_index: int, settings: Settings) -> list[AnalysisClip]:
+-    """Shared authority for source-to-timeline mapping in both analysis engines."""
+-    a, b = settings.validate(project.duration)
+-    project.assert_unchanged()
+-    tracks = project.data['tracks']
+-    if track_index not in [i for _, i in project.sources()]:
+-        raise UserError('Konuşma sesi içeren bir katman seçin.')
+-    segments = sorted(tracks[track_index]['segments'], key=lambda s: s['target_timerange']['start'])
+-    previous_end = 0
+-    clips = []
+-    for seg in segments:
+-        ta, tb = timerange(seg['target_timerange'])
+-        if ta < previous_end:
+-            raise UserError('Seçilen ses katmanında üst üste binen klipler var.')
+-        previous_end = tb
+-        left, right = max(a, ta), min(b, tb)
+-        if right <= left:
+-            continue
+-        if seg.get('speed', 1) != 1 or seg.get('reverse') or seg.get('is_loop'):
+-            raise UserError('Analiz kaynağı normal hızda ve düz oynatılıyor olmalı.')
+-        kind, material = project.materials.get(seg.get('material_id'), ('', {}))
+-        if kind == 'videos' and (material.get('type') != 'video' or not material.get('has_audio', True)):
+-            continue
+-        if kind not in ('audios', 'videos'):
+-            raise UserError('Seçilen katmanda analiz edilemeyen klip var.')
+-        sa, sb = timerange(seg.get('source_timerange'))
+-        if abs((sb-sa)-(tb-ta)) > 2:
+-            raise UserError('Kaynak ses ile zaman çizelgesi süreleri eşleşmiyor.')
+-        path = project.resolve_media(material)
+-        project.watch_media(path)
+-        clips.append(AnalysisClip(path,sa+left-ta,left,right))
+-    if not clips:
+-        raise UserError('Seçilen aralıkta analiz edilecek ses klibi yok.')
+-    return clips
+-
+-
+-def analyze(project: Project, track_index: int, settings: Settings, cancel: threading.Event,
+-            progress: Callable[[str], None] = lambda _: None) -> list[Cut]:
+-    clips=analysis_clips(project,track_index,settings)
+-    cuts=[]
+-    for i,clip in enumerate(clips):
+-        progress(f'{i+1}/{len(clips)} klip analiz ediliyor: {clip.path.name}')
+-        length = clip.end-clip.start
+-        # Detect on original channels: opposite-phase stereo must never cancel into silence.
+-        log = run_media(['-ss', f'{clip.source_start/US:.6f}', '-t', f'{length/US:.6f}', '-i', str(clip.path),
+-                         '-map', '0:a:0', '-vn', '-af', f'silencedetect=noise={settings.threshold}dB:d={settings.minimum}',
+-                         '-f', 'null', '-'], cancel, expected_duration=length)
+-        # Quantize inward to complete video frames, preserving speech at both boundaries.
+-        for raw in parse_silences(log, length):
+-            cut = silence_cut(clip.start+raw.start,clip.start+raw.end,settings,project.fps)
+-            if cut and cut.start >= clip.start and cut.end <= clip.end:
+-                cuts.append(cut)
+-    project.assert_unchanged()
+-    return normalize_cuts(cuts, project.duration)
+-
+-
+-def normalize_cuts(cuts: list[Cut], duration: int) -> list[Cut]:
+-    result: list[Cut] = []
+-    for cut in sorted(cuts):
+-        if type(cut.start) is not int or type(cut.end) is not int or not 0 <= cut.start < cut.end <= duration:
+-            raise UserError('Geçersiz kesim aralığı.')
+-        if result and cut.start <= result[-1].end:
+-            result[-1] = Cut(result[-1].start, max(result[-1].end, cut.end))
+-        else:
+-            result.append(cut)
+-    if sum(c.duration for c in result) >= duration:
+-        raise UserError('Projenin tamamı silinemez. Konuşma kaynağını ve ses eşiğini kontrol edin.')
+-    return result
+-
+-
+-def map_time(value: int, cuts: list[Cut]) -> int:
+-    return value - sum(max(0, min(value, c.end)-c.start) for c in cuts)
+-
+-
+-def edit_timeline(project: Project, cuts: list[Cut], *, allow_empty: bool=False) -> dict:
+-    issues = project.compatibility()
+-    if issues:
+-        raise UserError('Güvenli çıktı için önce şu yapılar sadeleştirilmeli:\n' + '\n'.join(issues))
+-    cuts = normalize_cuts(cuts, project.duration)
+-    if not cuts and not allow_empty:
+-        raise UserError('Silmek için en az bir aralık seçin.')
+-    data = copy.deepcopy(project.data)
+-    starts=[c.start for c in cuts];ends=[c.end for c in cuts]
+-    prefix=[0]
+-    for c in cuts:prefix.append(prefix[-1]+c.duration)
+-    def mapped(value):
+-        i=bisect_right(ends,value)
+-        return value-prefix[i]-(max(0,value-starts[i]) if i<len(cuts) else 0)
+-    for track in data['tracks']:
+-        edited = []
+-        for seg in track.get('segments', []):
+-            a, b = timerange(seg['target_timerange'])
+-            pieces=[];cursor=a
+-            for k in range(bisect_right(ends,a),bisect_left(starts,b)):
+-                cut=cuts[k]
+-                if cut.start>cursor:pieces.append((cursor,cut.start))
+-                cursor=max(cursor,cut.end)
+-            if cursor<b:pieces.append((cursor,b))
+-            for j, (x,y) in enumerate(pieces):
+-                item = copy.deepcopy(seg)
+-                if j or (x,y) != (a,b):
+-                    item['id'] = uid()
+-                item['target_timerange'] = {'start': mapped(x), 'duration': y-x}
+-                kind, material = project.materials[seg['material_id']]
+-                if item.get('source_timerange') and material.get('type') != 'photo':
+-                    sa, sb = timerange(seg['source_timerange'])
+-                    item['source_timerange'] = {'start': sa+x-a, 'duration': y-x}
+-                edited.append(item)
+-        track['segments'] = sorted(edited, key=lambda s: s['target_timerange']['start'])
+-    data['duration'] = project.duration-sum(c.duration for c in cuts)
+-    if data.get('time_marks') is not None:
+-        from timeline_markers import remap_time_marks
+-        data['time_marks']=remap_time_marks(data['time_marks'],cuts,project.duration)
+-    if not any(t['segments'] for t in data['tracks']):
+-        raise UserError('Kesimler bütün içeriği siliyor.')
+-    if data.get('config', {}).get('export_range'):
+-        data['config']['export_range'] = None
+-    data['update_time'] = int(time.time()*US)
+-    return data
+-
+-
+-def capcut_running() -> bool:
+-    return capcut_is_running()
+-
+-
+-def replace_internal_paths(value, old: Path, new: Path):
+-    if isinstance(value, str):
+-        for before, after in ((str(old), str(new)), (old.as_posix(), new.as_posix())):
+-            if value == before or value.startswith(before+'\\') or value.startswith(before+'/'):
+-                return after + value[len(before):]
+-        return value
+-    if isinstance(value, dict):
+-        return {k: replace_internal_paths(v, old, new) for k,v in value.items()}
+-    if isinstance(value, list):
+-        return [replace_internal_paths(v, old, new) for v in value]
+-    return value
+-
+-
+-def create_copy(project: Project, cuts: list[Cut], cancel: threading.Event,
+-                index: Path = DEFAULT_INDEX, check_running: bool = True,
+-                review: dict | None = None, captions: list[dict] | None = None,
+-                markers: list[dict] | None = None) -> Path:
+-    """Publish a new sibling folder, then register it; original project is never written."""
+-    if check_running and capcut_running():
+-        raise UserError('Kopya oluştururken CapCut kapalı olmalı. Kaydedip CapCut’ı kapatın; sonra tekrar deneyin.')
+-    if cancel.is_set():
+-        raise Cancelled('İşlem iptal edildi.')
+-    project.assert_unchanged()
+-    data = edit_timeline(project, cuts,allow_empty=True)
+-    from timeline_markers import add_repeat_markers
+-    marker_report=add_repeat_markers(data,markers or [],cuts,project.duration)
+-    caption_cues=[]
+-    if captions is not None:
+-        from captions import add_caption_track
+-        caption_cues=add_caption_track(data,captions)
+-    # Reject junctions/reparse points, including files, before traversing a user project.
+-    for root, dirs, files in os.walk(project.folder, followlinks=False):
+-        for name in dirs+files:
+-            p = Path(root)/name
+-            if p.is_symlink() or getattr(p.lstat(), 'st_file_attributes', 0) & 0x400:
+-                raise UserError(f'Proje içinde yönlendirilmiş dosya/klasör desteklenmiyor: {p}')
+-    project_id, timeline_id = uid(), uid()
+-    output = project.folder.parent / ('Sessizlik-' + time.strftime('%Y%m%d-%H%M%S') + '-' + project_id[:6])
+-    stage = project.folder.parent / ('.sessizlik-hazirlaniyor-' + project_id)
+-    published = False
+-    try:
+-        def copy_file(src, dst):
+-            if cancel.is_set():
+-                raise Cancelled('İşlem iptal edildi.')
+-            return shutil.copy2(src,dst)
+-        shutil.copytree(project.folder, stage, copy_function=copy_file)
+-        old_timeline = data['id']
+-        data = replace_internal_paths(data,project.folder,output)
+-        data['id'] = timeline_id
+-        name = project.name + ' · Sessizlik temizlendi'
+-        data['name'] = name
+-        now = int(time.time()*US)
+-        meta = replace_internal_paths(copy.deepcopy(project.meta),project.folder,output)
+-        meta.update(draft_id=project_id, draft_name=name, draft_fold_path=output.as_posix(),
+-                    draft_root_path=str(output.parent), tm_duration=data['duration'], tm_draft_create=now,
+-                    tm_draft_modified=now, tm_draft_removed=0, cloud_draft_sync=False,
+-                    cloud_draft_cover=False, draft_is_cloud_temp_draft=False,
+-                    draft_cloud_last_action_download=False, draft_need_rename_folder=False)
+-        # Remove recovery copies in the NEW folder so stale edits cannot override the new timeline.
+-        for p in list(stage.rglob('*')):
+-            if p.is_file() and (p.suffix in ('.bak','.tmp') or p.name == 'mini_draft.json'):
+-                p.unlink()
+-        if project.manifest.exists():
+-            manifest = load_json(stage/'Timelines/project.json')
+-            old_folder = stage/'Timelines'/old_timeline
+-            new_folder = stage/'Timelines'/timeline_id
+-            old_folder.rename(new_folder)
+-            manifest.update(id=uid(), main_timeline_id=timeline_id, create_time=now, update_time=now)
+-            for t in manifest['timelines']:
+-                if t['id'] == old_timeline:
+-                    t.update(id=timeline_id, create_time=now, update_time=now)
+-            atomic_json(stage/'Timelines/project.json',manifest)
+-            atomic_json(new_folder/project.file.name,data)
+-            layout = stage/'timeline_layout.json'
+-            if layout.exists():
+-                text = layout.read_text(encoding='utf-8').replace(old_timeline,timeline_id)
+-                layout.write_text(text,encoding='utf-8')
+-        atomic_json(stage/project.file.name,data)
+-        atomic_json(stage/'draft_meta_info.json',meta)
+-        if caption_cues:
+-            from captions import srt_text
+-            (stage/'otomatik_altyazi.srt').write_text(srt_text(caption_cues),encoding='utf-8-sig')
+-        elif cuts:
+-            # A tool-created SRT copied from the input still describes the old timeline.
+-            (stage/'otomatik_altyazi.srt').unlink(missing_ok=True)
+-        atomic_json(stage/'sessizlik_raporu.json', {
+-            'source_project': str(project.folder), 'source_hash': project.hashes[project.file],
+-            'original_duration_us':project.duration,'duration_us':data['duration'],
+-            'cuts_us': [[c.start,c.end] for c in normalize_cuts(cuts,project.duration)],
+-            'capcut_open_verified': False, 'tool_version': VERSION, 'review': review,
+-            'repeat_markers':marker_report,
+-            'captions':{'enabled':bool(caption_cues),'count':len(caption_cues),'language':'tr',
+-                        'editable_text_track':bool(caption_cues),'cues':caption_cues}})
+-        # Read back everything before publication. Also catches mirror and duration mistakes.
+-        verify = Project(stage)
+-        if verify.duration != data['duration']:
+-            raise UserError('Yazılan kopyanın süresi doğrulanamadı.')
+-        if cancel.is_set():
+-            raise Cancelled('İşlem iptal edildi.')
+-        project.assert_unchanged()
+-        if check_running and capcut_running():
+-            raise UserError('CapCut açıldı; kopya yayımlanmadı. CapCut’ı kapatıp tekrar deneyin.')
+-        # Prepare registration before publishing. Preserve every existing entry and a byte-exact backup.
+-        registration = None
+-        if index.exists():
+-            before = index.read_bytes()
+-            registration = load_json(index)
+-            if not isinstance(registration.get('all_draft_store'), list):
+-                raise UserError('CapCut proje listesi biçimi tanınmadı.')
+-            entry = {k:v for k,v in meta.items() if k not in ('draft_materials','draft_segment_extra_info')}
+-            entry.update(draft_json_file=(output/project.file.name).as_posix(),
+-                         draft_cover=(output/'draft_cover.jpg').as_posix())
+-            registration['all_draft_store'].insert(0,entry)
+-            if type(registration.get('draft_ids')) is int:
+-                registration['draft_ids'] += 1
+-            if index.read_bytes() != before:
+-                raise UserError('CapCut proje listesi değişti. Tekrar deneyin.')
+-            backup = index.with_name(index.name+'.sessizlik-'+project_id+'.bak')
+-            backup.write_bytes(before)
+-        stage.rename(output)
+-        published = True
+-        if registration is not None:
+-            try:
+-                if index.read_bytes() != before:
+-                    raise UserError('CapCut proje listesi değişti; kopya kaydı eklenmedi.')
+-                atomic_json(index,registration)
+-            except Exception as exc:
+-                raise UserError(f'Kopya hazır ama CapCut listesine eklenemedi: {output}\n{exc}') from exc
+-        return output
+-    finally:
+-        # Only this invocation's exact temporary directory can be removed.
+-        if not published and stage.exists() and stage.parent == project.folder.parent and stage.name == '.sessizlik-hazirlaniyor-'+project_id:
+-            shutil.rmtree(stage)
+-
+-
+-def preview(project: Project, track_index: int, cut: Cut, output: Path,
+-            cancel: threading.Event, after: bool = False, full: bool = False) -> None:
+-    project.assert_unchanged()
+-    if not 0<=cut.start<cut.end<=project.duration:
+-        raise UserError('Dinlenecek aralık proje içinde olmalı.')
+-    # Include context around each boundary; after mode removes the candidate interval.
+-    a, b = max(0,cut.start-US), min(project.duration,cut.end+US)
+-    if full:
+-        windows = [(cut.start,cut.end)]
+-    elif after:
+-        windows = [(a,cut.start),(cut.end,b)]
+-    elif b-a > 12*US:
+-        windows = [(a,cut.start+US),(cut.end-US,b)]
+-    else:
+-        windows = [(a,b)]
+-    segments=sorted(project.data['tracks'][track_index]['segments'],key=lambda s:s['target_timerange']['start'])
+-    # None represents a real gap in the selected track; keep it audible as silence.
+-    clips = []
+-    for left,right in windows:
+-        cursor=left
+-        for seg in segments:
+-            ta,tb=timerange(seg['target_timerange'])
+-            x,y=max(left,ta),min(right,tb)
+-            if y<=x:
+-                continue
+-            if x>cursor:
+-                clips.append((None,cursor,x))
+-            clips.append((seg,x,y));cursor=y
+-        if cursor<right:
+-            clips.append((None,cursor,right))
+-    if not any(seg for seg,_,_ in clips):
+-        raise UserError('Bu aralıkta dinlenebilecek ses bulunamadı.')
+-    # Render each overlap individually and concatenate WAV PCM through Python's wave module.
+-    import wave
+-    with tempfile.TemporaryDirectory(prefix='capcut-preview-') as temp:
+-        chunks = []
+-        for i,(seg,x,y) in enumerate(clips):
+-            frames=round((y-x)*22050/US)
+-            if seg is None:
+-                chunks.append((None,frames))
+-                continue
+-            _,material=project.materials[seg['material_id']]
+-            path=project.resolve_media(material)
+-            source=seg['source_timerange']['start']+x-seg['target_timerange']['start']
+-            piece=Path(temp)/f'{i}.wav'
+-            run_media(['-y','-ss',f'{source/US:.6f}','-t',f'{(y-x)/US:.6f}','-i',str(path),
+-                       '-map','0:a:0','-vn','-ar','22050','-ac','1','-c:a','pcm_s16le',str(piece)],cancel)
+-            chunks.append((piece,frames))
+-        with wave.open(str(output),'wb') as dest:
+-            dest.setnchannels(1);dest.setsampwidth(2);dest.setframerate(22050)
+-            for path,frames in chunks:
+-                if path is None:
+-                    dest.writeframes(b'\0'*(frames*2))
+-                else:
+-                    with wave.open(str(path),'rb') as src:
+-                        pcm=src.readframes(frames)
+-                        dest.writeframes(pcm+b'\0'*max(0,frames*2-len(pcm)))
++"""Offline CapCut timeline analysis. All editing is performed on a new copy."""
++from __future__ import annotations
++
++import copy
++import hashlib
++import json
++import math
++import os
++from pathlib import Path
++import re
++import shutil
++import subprocess
++import tempfile
++import threading
++import time
++import uuid
++from bisect import bisect_left, bisect_right
++from dataclasses import dataclass
++from typing import Callable
++from platform_support import (application_home,default_capcut_index,capcut_indexes,
++                              ffmpeg_path,capcut_is_running,VERSION)
++
++HOME = Path.home()
++APP = application_home()
++DEFAULT_INDEX = default_capcut_index()
++US = 1_000_000
++CREATE_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
++
++
++class UserError(Exception):
++    pass
++
++
++class Cancelled(UserError):
++    pass
++
++
++def load_json(path: Path) -> dict:
++    try:
++        value = json.loads(path.read_text(encoding='utf-8-sig'))
++    except (OSError, UnicodeError, ValueError) as exc:
++        raise UserError(f'JSON okunamadı: {path}\n{exc}') from exc
++    if not isinstance(value, dict):
++        raise UserError(f'Proje biçimi tanınmadı: {path}')
++    return value
++
++
++def digest(path: Path) -> str:
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def atomic_json(path: Path, data: dict) -> None:
++    fd, name = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
++    try:
++        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as stream:
++            json.dump(data, stream, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
++            stream.flush()
++            os.fsync(stream.fileno())
++        # Windows readers/antivirus can briefly hold a handle without delete sharing.
++        for attempt in range(8):
++            try:
++                os.replace(name, path)
++                break
++            except PermissionError:
++                if attempt==7:
++                    raise
++                time.sleep(.01*(attempt+1))
++    finally:
++        Path(name).unlink(missing_ok=True)
++
++
++def uid() -> str:
++    return str(uuid.uuid4()).upper()
++
++
++def project_content_file(folder: Path) -> Path:
++    """Preserve the saved timeline filename on both platforms."""
++    existing = [folder / name for name in ('draft_content.json', 'draft_info.json') if (folder / name).is_file()]
++    if len(existing) != 1:
++        raise UserError(f'Klasörde tek bir draft_content.json veya draft_info.json olmalı: {folder}')
++    return existing[0]
++
++
++def has_project_content(folder: Path) -> bool:
++    return any((folder / name).is_file() for name in ('draft_content.json', 'draft_info.json'))
++
++
++def discover_projects(index: Path | None = None) -> list[tuple[str, Path]]:
++    """Follow registered paths; the project storage can be on another drive."""
++    found: dict[Path, str] = {}
++    indexes=[index] if index is not None else capcut_indexes(HOME)
++    roots = {p.parent for p in indexes}
++    for candidate_index in indexes:
++        if candidate_index.is_file():
++            for item in load_json(candidate_index).get('all_draft_store', []):
++                if item.get('draft_root_path'):
++                    roots.add(Path(item['draft_root_path']))
++                p = Path(item.get('draft_fold_path', ''))
++                if not item.get('tm_draft_removed') and has_project_content(p):
++                    found[p.resolve()] = item.get('draft_name') or p.name
++    for root in roots:
++        if root.is_dir():
++            for p in root.iterdir():
++                if p.is_dir() and not p.name.startswith('.') and has_project_content(p):
++                    try:
++                        meta = load_json(p / 'draft_meta_info.json')
++                        if not meta.get('tm_draft_removed'):
++                            found[p.resolve()] = meta.get('draft_name') or p.name
++                    except UserError:
++                        continue
++    return sorted(((n, p) for p, n in found.items()), key=lambda x: x[0].casefold())
++
++
++def timerange(value: dict | None) -> tuple[int, int]:
++    if not isinstance(value, dict):
++        raise UserError('Eksik zaman aralığı.')
++    a, duration = value.get('start'), value.get('duration')
++    if type(a) is not int or type(duration) is not int or a < 0 or duration <= 0:
++        raise UserError('Geçersiz klip zaman aralığı.')
++    return a, a + duration
++
++
++@dataclass(frozen=True, order=True)
++class Cut:
++    start: int
++    end: int
++
++    @property
++    def duration(self) -> int:
++        return self.end - self.start
++
++
++@dataclass(frozen=True)
++class Settings:
++    threshold: float = -35.0
++    minimum: float = 0.5
++    padding: float = 0.1
++    start: float = 0.0
++    end: float | None = None
++    maximum: float | None = None
++    lead_padding: float | None = None
++    minimum_cut: float = 0.08
++    auto_jump_cut: bool = False
++    next_speech_padding: float | None = None
++
++    def validate(self, duration: int) -> tuple[int, int]:
++        if type(self.auto_jump_cut) is not bool:
++            raise UserError('Otomatik jump cut seçimi geçersiz.')
++        if self.auto_jump_cut:
++            if type(duration) is not int or duration<=0:
++                raise UserError('Zaman çizelgesi süresi geçersiz.')
++            if self.next_speech_padding is not None and (not isinstance(self.next_speech_padding,(int,float)) or
++                    not math.isfinite(self.next_speech_padding) or not 0<=self.next_speech_padding<=5):
++                raise UserError('Yeni konuşma öncesi pay 0–5 saniye arasında olmalı.')
++            return 0,duration
++        values = [self.threshold, self.minimum, self.padding, self.start]
++        values.append(self.minimum_cut)
++        if self.lead_padding is not None:
++            values.append(self.lead_padding)
++        if self.end is not None:
++            values.append(self.end)
++        if self.maximum is not None:
++            values.append(self.maximum)
++        if not all(math.isfinite(x) for x in values):
++            raise UserError('Ayarlar sonlu sayılar olmalı.')
++        if not -100 <= self.threshold <= -1:
++            raise UserError('Ses eşiği −100 ile −1 dB arasında olmalı.')
++        if not 0.02 <= self.minimum <= 60 or not 0 <= self.padding <= 5:
++            raise UserError('Minimum sessizlik 0,02–60 sn; koruma payı 0–5 sn olmalı.')
++        if not 0 <= self.minimum_cut <= 5 or (self.lead_padding is not None and not 0 <= self.lead_padding <= 5):
++            raise UserError('Kelime başı payı ve en kısa kesim 0–5 sn olmalı.')
++        if self.maximum is not None and self.maximum < self.minimum:
++            raise UserError('En uzun boşluk, en kısa boşluktan küçük olamaz.')
++        a = 0 if self.auto_jump_cut else round(self.start * US)
++        b = duration if self.auto_jump_cut or self.end is None else round(self.end * US)
++        if not 0 <= a < b <= duration:
++            raise UserError('İşlem aralığı proje içinde olmalı; bitiş başlangıçtan büyük olmalı.')
++        return a, b
++
++    def accepts_silence(self, duration: int) -> bool:
++        return (duration >= round(self.minimum * US) and
++                (self.maximum is None or duration <= round(self.maximum * US)))
++
++
++def silence_cut(start: int, end: int, settings: Settings, fps: float) -> Cut | None:
++    """Keep the previous word's tail and the next word's onset; quantize inward."""
++    if not settings.accepts_silence(end-start):
++        return None
++    lead = settings.padding if settings.lead_padding is None else settings.lead_padding
++    a = round(math.ceil((start+settings.padding*US)*fps/US-1e-8)*US/fps)
++    b = round(math.floor((end-lead*US)*fps/US+1e-8)*US/fps)
++    if b > a and b-a >= round(settings.minimum_cut*US):
++        return Cut(a,b)
++    return None
++
++
++class Project:
++    def __init__(self, folder: Path):
++        self.folder = Path(folder).resolve()
++        if self.folder.is_file():
++            self.folder = self.folder.parent
++        self.file = project_content_file(self.folder)
++        self.data = load_json(self.file)
++        timeline_id=self.data.get('id')
++        if (not isinstance(timeline_id,str) or not timeline_id.strip() or timeline_id in ('.','..') or
++            any(c in timeline_id for c in '/\\:') or timeline_id.rstrip(' .')!=timeline_id):
++            raise UserError('Zaman çizelgesi kimliği geçersiz; güvenli proje klasörü oluşturulamaz.')
++        self.meta = load_json(self.folder / 'draft_meta_info.json')
++        if self.data.get('version') != 360000:
++            raise UserError('Bu taslak sürümü doğrulanmadı. Desteklenen JSON sürümü: 360000.')
++        if not isinstance(self.data.get('tracks'), list) or not isinstance(self.data.get('materials'), dict):
++            raise UserError('CapCut zaman çizelgesi bulunamadı.')
++        self.duration = self.data.get('duration')
++        self.fps = self.data.get('fps')
++        if type(self.duration) is not int or self.duration <= 0:
++            raise UserError('Proje boş veya süresi geçersiz.')
++        if not isinstance(self.fps, (int, float)) or not math.isfinite(self.fps) or not 1 <= self.fps <= 240:
++            raise UserError('Geçersiz proje kare hızı.')
++        self.manifest = self.folder / 'Timelines/project.json'
++        self.content_files = [self.file]
++        if self.manifest.exists():
++            manifest = load_json(self.manifest)
++            timelines = [t for t in manifest.get('timelines', []) if not t.get('is_marked_delete')]
++            if len(timelines) != 1 or manifest.get('main_timeline_id') != self.data.get('id'):
++                raise UserError('İlk sürüm yalnızca tek zaman çizelgeli projeleri destekliyor.')
++            mirror = self.folder / 'Timelines' / self.data['id'] / self.file.name
++            if not mirror.exists() or load_json(mirror) != self.data:
++                raise UserError('Ana taslak ile zaman çizelgesi kopyası uyuşmuyor. CapCut’ta kaydedip kapatın.')
++            self.content_files.append(mirror)
++        files = [*self.content_files, self.folder / 'draft_meta_info.json']
++        if self.manifest.exists():
++            files.append(self.manifest)
++        self.hashes = {p: digest(p) for p in files}
++        self.materials = {m['id']: (kind, m) for kind, entries in self.data['materials'].items()
++                          if isinstance(entries, list) for m in entries if isinstance(m, dict) and m.get('id')}
++        self.media_stamps: dict[Path, tuple[int, int]] = {}
++        for track in self.data['tracks']:
++            for seg in track.get('segments', []):
++                timerange(seg.get('target_timerange'))
++
++    @property
++    def name(self) -> str:
++        return self.meta.get('draft_name') or self.folder.name
++
++    def resolve_media(self, material: dict) -> Path:
++        raw = material.get('path', '')
++        if not isinstance(raw, str) or not raw:
++            raise UserError('Klip için yerel medya yolu bulunamadı.')
++        raw = re.sub(r'^##_draftpath_placeholder_[^/\\]+_##', str(self.folder).replace('\\', '/'), raw)
++        if '://' in raw or '##_draftpath_' in raw:
++            raise UserError('Yalnızca indirilen, yerel medya destekleniyor.')
++        path = Path(raw)
++        if not path.is_absolute():
++            path = self.folder / path
++        path = path.resolve()
++        if not path.is_file():
++            raise UserError(f'Medya bulunamadı: {path}')
++        return path
++
++    def watch_media(self, path: Path) -> None:
++        stat = path.stat()
++        self.media_stamps.setdefault(path, (stat.st_size, stat.st_mtime_ns))
++
++    def assert_unchanged(self) -> None:
++        for path, expected in self.hashes.items():
++            if not path.is_file() or digest(path) != expected:
++                raise UserError('Proje analizden sonra değişti. Projeyi yeniden yükleyip analiz edin.')
++        for path, expected in self.media_stamps.items():
++            if not path.is_file() or (path.stat().st_size, path.stat().st_mtime_ns) != expected:
++                raise UserError(f'Medya analizden sonra değişti: {path.name}')
++
++    def sources(self) -> list[tuple[str, int]]:
++        result = []
++        for i, track in enumerate(self.data['tracks']):
++            if track.get('type') not in ('audio', 'video'):
++                continue
++            names = []
++            for seg in track.get('segments', []):
++                kind, m = self.materials.get(seg.get('material_id'), ('', {}))
++                if kind == 'audios' or (kind == 'videos' and m.get('type') == 'video' and m.get('has_audio', True)):
++                    name = m.get('name') or m.get('material_name') or Path(m.get('path', '')).name
++                    if name and name not in names:
++                        names.append(name)
++            if names:
++                title = track.get('name') or ('Ses' if track['type'] == 'audio' else 'Video sesi')
++                result.append((f'{i+1}. {title} · {", ".join(names)[:110]}', i))
++        return result
++
++    def compatibility(self) -> list[str]:
++        issues: set[str] = set()
++        if any(self.meta.get(k) for k in ('cloud_draft_sync', 'draft_is_cloud_temp_draft')):
++            issues.add('Buluta bağlı proje: önce yerel bir kopya oluşturun.')
++        if self.data.get('relationships') or self.data.get('group_container'):
++            issues.add('Klip grupları/bağlantıları henüz desteklenmiyor.')
++        if self.data.get('time_marks') is not None:
++            from timeline_markers import validate_time_marks
++            try:validate_time_marks(self.data['time_marks'],self.duration)
++            except UserError as exc:issues.add(str(exc))
++        if self.data.get('keyframe_graph_list') or any((self.data.get('keyframes') or {}).values()):
++            issues.add('Genel anahtar kareler henüz desteklenmiyor.')
++        for ti, track in enumerate(self.data['tracks']):
++            if track.get('type') not in ('audio', 'video', 'text'):
++                issues.add(f'{ti+1}. katman türü desteklenmiyor: {track.get("type")}')
++            for seg in track.get('segments', []):
++                kind, material = self.materials.get(seg.get('material_id'), ('', {}))
++                if kind not in ('videos', 'audios', 'texts') or material.get('type') == 'draft':
++                    issues.add(f'{ti+1}. katmanda birleşik/eksik/desteklenmeyen materyal var.')
++                if seg.get('speed', 1) != 1 or seg.get('reverse') or seg.get('is_loop'):
++                    issues.add(f'{ti+1}. katmanda hız değişimi, ters oynatma veya döngü var.')
++                if seg.get('common_keyframes') or seg.get('keyframe_refs') or seg.get('lyric_keyframes'):
++                    issues.add(f'{ti+1}. katmanda anahtar kare var.')
++                if seg.get('group_id') or seg.get('caption_info') or (seg.get('responsive_layout') or {}).get('enable'):
++                    issues.add(f'{ti+1}. katmanda bağlı/dinamik yerleşim var.')
++                if (seg.get('render_timerange') or {}).get('duration', 0):
++                    issues.add(f'{ti+1}. katmanda özel render aralığı var.')
++                if kind == 'texts':
++                    if material.get('text_to_audio_ids') or material.get('relevance_segment') or material.get('is_lyric_effect'):
++                        issues.add(f'{ti+1}. katmanda bağlı/animasyonlu altyazı var.')
++                    for key in ('words', 'current_words'):
++                        words = material.get(key) or {}
++                        if words.get('start_time') or words.get('end_time'):
++                            issues.add(f'{ti+1}. katmanda kelime zamanlamalı altyazı var; basit metne dönüştürün.')
++                for ref in seg.get('extra_material_refs', []):
++                    rk, rm = self.materials.get(ref, ('unknown', {}))
++                    safe = rk in ('canvases', 'sound_channel_mappings', 'material_colors', 'placeholder_infos', 'hsl', 'common_mask')
++                    safe |= rk == 'speeds' and rm.get('speed', 1) == 1 and not rm.get('curve_speed')
++                    safe |= rk == 'material_animations' and not rm.get('animations')
++                    safe |= rk == 'audio_fades' and not rm.get('fade_in_duration') and not rm.get('fade_out_duration')
++                    safe |= rk == 'beats' and not rm.get('enable_ai_beats') and not rm.get('user_beats')
++                    safe |= rk == 'vocal_separations' and rm.get('choice', 0) in (0, None) and not rm.get('production_path')
++                    if not safe:
++                        issues.add(f'{ti+1}. katmanda doğrulanmamış efekt/bağlantı: {rk}.')
++                if kind in ('audios', 'videos'):
++                    try:
++                        path = self.resolve_media(material)
++                        self.watch_media(path)
++                        if material.get('type') != 'photo':
++                            sa, sb = timerange(seg.get('source_timerange'))
++                            a, b = timerange(seg['target_timerange'])
++                            if abs((sb-sa)-(b-a)) > 2:
++                                issues.add(f'{ti+1}. katmanda kaynak/hedef süre eşleşmiyor.')
++                    except UserError as exc:
++                        issues.add(str(exc))
++        return sorted(issues)
++
++
++def ffmpeg_executable() -> str:
++    exe = ffmpeg_path(APP)
++    if not exe:
++        raise UserError('FFmpeg bulunamadı. Kurulum yönergelerine bakın.')
++    return str(exe)
++
++
++def run_media(args: list[str], cancel: threading.Event, expected_duration: int | None = None) -> str:
++    if cancel.is_set():
++        raise Cancelled('İşlem iptal edildi.')
++    with tempfile.TemporaryFile() as log, tempfile.TemporaryFile() as progress:
++        proc = subprocess.Popen([ffmpeg_executable(), '-nostdin', '-hide_banner', '-progress', 'pipe:1', *args],
++                                stdin=subprocess.DEVNULL, stdout=progress, stderr=log,
++                                creationflags=CREATE_NO_WINDOW)
++        try:
++            while proc.poll() is None:
++                if cancel.wait(0.1):
++                    raise Cancelled('İşlem iptal edildi.')
++            log.seek(0, 2)
++            if log.tell() > 32 * 1024 * 1024:
++                raise UserError('Ses analiz günlüğü çok büyük. Daha kısa bir aralık seçin.')
++            log.seek(0)
++            output = log.read().decode('utf-8', 'replace')
++            if proc.returncode:
++                raise UserError('Medya okunamadı:\n' + output[-1600:])
++            if expected_duration is not None:
++                progress.seek(0)
++                elapsed = re.findall(rb'out_time_us=(\d+)', progress.read())
++                if not elapsed or int(elapsed[-1]) < expected_duration-50_000:
++                    raise UserError('Ses dosyası zaman çizelgesindeki aralıktan kısa veya çözümlenemedi. Medyayı kontrol edin.')
++            return output
++        finally:
++            if proc.poll() is None:
++                proc.kill()
++            proc.wait()
++
++
++def parse_silences(log: str, duration: int) -> list[Cut]:
++    result = []
++    pending = None
++    for event, raw in re.findall(r'silence_(start|end):\s*([-+0-9.eE]+)', log):
++        value = min(duration, max(0, round(float(raw) * US)))
++        if event == 'start':
++            pending = value
++        elif pending is not None:
++            if value > pending:
++                result.append(Cut(pending, value))
++            pending = None
++    if pending is not None and pending < duration:
++        result.append(Cut(pending, duration))
++    return result
++
++
++@dataclass(frozen=True)
++class AnalysisClip:
++    path: Path
++    source_start: int
++    start: int
++    end: int
++
++
++def analysis_clips(project: Project, track_index: int, settings: Settings) -> list[AnalysisClip]:
++    """Shared authority for source-to-timeline mapping in both analysis engines."""
++    a, b = settings.validate(project.duration)
++    project.assert_unchanged()
++    tracks = project.data['tracks']
++    if track_index not in [i for _, i in project.sources()]:
++        raise UserError('Konuşma sesi içeren bir katman seçin.')
++    segments = sorted(tracks[track_index]['segments'], key=lambda s: s['target_timerange']['start'])
++    previous_end = 0
++    clips = []
++    for seg in segments:
++        ta, tb = timerange(seg['target_timerange'])
++        if ta < previous_end:
++            raise UserError('Seçilen ses katmanında üst üste binen klipler var.')
++        previous_end = tb
++        left, right = max(a, ta), min(b, tb)
++        if right <= left:
++            continue
++        if seg.get('speed', 1) != 1 or seg.get('reverse') or seg.get('is_loop'):
++            raise UserError('Analiz kaynağı normal hızda ve düz oynatılıyor olmalı.')
++        kind, material = project.materials.get(seg.get('material_id'), ('', {}))
++        if kind == 'videos' and (material.get('type') != 'video' or not material.get('has_audio', True)):
++            continue
++        if kind not in ('audios', 'videos'):
++            raise UserError('Seçilen katmanda analiz edilemeyen klip var.')
++        sa, sb = timerange(seg.get('source_timerange'))
++        if abs((sb-sa)-(tb-ta)) > 2:
++            raise UserError('Kaynak ses ile zaman çizelgesi süreleri eşleşmiyor.')
++        path = project.resolve_media(material)
++        project.watch_media(path)
++        clips.append(AnalysisClip(path,sa+left-ta,left,right))
++    if not clips:
++        raise UserError('Seçilen aralıkta analiz edilecek ses klibi yok.')
++    return clips
++
++
++def analyze(project: Project, track_index: int, settings: Settings, cancel: threading.Event,
++            progress: Callable[[str], None] = lambda _: None) -> list[Cut]:
++    clips=analysis_clips(project,track_index,settings)
++    cuts=[]
++    for i,clip in enumerate(clips):
++        progress(f'{i+1}/{len(clips)} klip analiz ediliyor: {clip.path.name}')
++        length = clip.end-clip.start
++        # Detect on original channels: opposite-phase stereo must never cancel into silence.
++        log = run_media(['-ss', f'{clip.source_start/US:.6f}', '-t', f'{length/US:.6f}', '-i', str(clip.path),
++                         '-map', '0:a:0', '-vn', '-af', f'silencedetect=noise={settings.threshold}dB:d={settings.minimum}',
++                         '-f', 'null', '-'], cancel, expected_duration=length)
++        # Quantize inward to complete video frames, preserving speech at both boundaries.
++        for raw in parse_silences(log, length):
++            cut = silence_cut(clip.start+raw.start,clip.start+raw.end,settings,project.fps)
++            if cut and cut.start >= clip.start and cut.end <= clip.end:
++                cuts.append(cut)
++    project.assert_unchanged()
++    return normalize_cuts(cuts, project.duration)
++
++
++def normalize_cuts(cuts: list[Cut], duration: int) -> list[Cut]:
++    result: list[Cut] = []
++    for cut in sorted(cuts):
++        if type(cut.start) is not int or type(cut.end) is not int or not 0 <= cut.start < cut.end <= duration:
++            raise UserError('Geçersiz kesim aralığı.')
++        if result and cut.start <= result[-1].end:
++            result[-1] = Cut(result[-1].start, max(result[-1].end, cut.end))
++        else:
++            result.append(cut)
++    if sum(c.duration for c in result) >= duration:
++        raise UserError('Projenin tamamı silinemez. Konuşma kaynağını ve ses eşiğini kontrol edin.')
++    return result
++
++
++def map_time(value: int, cuts: list[Cut]) -> int:
++    return value - sum(max(0, min(value, c.end)-c.start) for c in cuts)
++
++
++def edit_timeline(project: Project, cuts: list[Cut], *, allow_empty: bool=False) -> dict:
++    issues = project.compatibility()
++    if issues:
++        raise UserError('Güvenli çıktı için önce şu yapılar sadeleştirilmeli:\n' + '\n'.join(issues))
++    cuts = normalize_cuts(cuts, project.duration)
++    if not cuts and not allow_empty:
++        raise UserError('Silmek için en az bir aralık seçin.')
++    data = copy.deepcopy(project.data)
++    starts=[c.start for c in cuts];ends=[c.end for c in cuts]
++    prefix=[0]
++    for c in cuts:prefix.append(prefix[-1]+c.duration)
++    def mapped(value):
++        i=bisect_right(ends,value)
++        return value-prefix[i]-(max(0,value-starts[i]) if i<len(cuts) else 0)
++    for track in data['tracks']:
++        edited = []
++        for seg in track.get('segments', []):
++            a, b = timerange(seg['target_timerange'])
++            pieces=[];cursor=a
++            for k in range(bisect_right(ends,a),bisect_left(starts,b)):
++                cut=cuts[k]
++                if cut.start>cursor:pieces.append((cursor,cut.start))
++                cursor=max(cursor,cut.end)
++            if cursor<b:pieces.append((cursor,b))
++            for j, (x,y) in enumerate(pieces):
++                item = copy.deepcopy(seg)
++                if j or (x,y) != (a,b):
++                    item['id'] = uid()
++                item['target_timerange'] = {'start': mapped(x), 'duration': y-x}
++                kind, material = project.materials[seg['material_id']]
++                if item.get('source_timerange') and material.get('type') != 'photo':
++                    sa, sb = timerange(seg['source_timerange'])
++                    item['source_timerange'] = {'start': sa+x-a, 'duration': y-x}
++                edited.append(item)
++        track['segments'] = sorted(edited, key=lambda s: s['target_timerange']['start'])
++    data['duration'] = project.duration-sum(c.duration for c in cuts)
++    if data.get('time_marks') is not None:
++        from timeline_markers import remap_time_marks
++        data['time_marks']=remap_time_marks(data['time_marks'],cuts,project.duration)
++    if not any(t['segments'] for t in data['tracks']):
++        raise UserError('Kesimler bütün içeriği siliyor.')
++    if data.get('config', {}).get('export_range'):
++        data['config']['export_range'] = None
++    data['update_time'] = int(time.time()*US)
++    return data
++
++
++def capcut_running() -> bool:
++    return capcut_is_running()
++
++
++def replace_internal_paths(value, old: Path, new: Path):
++    if isinstance(value, str):
++        for before, after in ((str(old), str(new)), (old.as_posix(), new.as_posix())):
++            if value == before or value.startswith(before+'\\') or value.startswith(before+'/'):
++                return after + value[len(before):]
++        return value
++    if isinstance(value, dict):
++        return {k: replace_internal_paths(v, old, new) for k,v in value.items()}
++    if isinstance(value, list):
++        return [replace_internal_paths(v, old, new) for v in value]
++    return value
++
++
++def create_copy(project: Project, cuts: list[Cut], cancel: threading.Event,
++                index: Path = DEFAULT_INDEX, check_running: bool = True,
++                review: dict | None = None, captions: list[dict] | None = None,
++                markers: list[dict] | None = None) -> Path:
++    """Publish a new sibling folder, then register it; original project is never written."""
++    if check_running and capcut_running():
++        raise UserError('Kopya oluştururken CapCut kapalı olmalı. Kaydedip CapCut’ı kapatın; sonra tekrar deneyin.')
++    if cancel.is_set():
++        raise Cancelled('İşlem iptal edildi.')
++    project.assert_unchanged()
++    data = edit_timeline(project, cuts,allow_empty=True)
++    from timeline_markers import add_repeat_markers
++    marker_report=add_repeat_markers(data,markers or [],cuts,project.duration)
++    caption_cues=[]
++    if captions is not None:
++        from captions import add_caption_track
++        caption_cues=add_caption_track(data,captions)
++    # Reject junctions/reparse points, including files, before traversing a user project.
++    for root, dirs, files in os.walk(project.folder, followlinks=False):
++        for name in dirs+files:
++            p = Path(root)/name
++            if p.is_symlink() or getattr(p.lstat(), 'st_file_attributes', 0) & 0x400:
++                raise UserError(f'Proje içinde yönlendirilmiş dosya/klasör desteklenmiyor: {p}')
++    project_id, timeline_id = uid(), uid()
++    output = project.folder.parent / ('Sessizlik-' + time.strftime('%Y%m%d-%H%M%S') + '-' + project_id[:6])
++    stage = project.folder.parent / ('.sessizlik-hazirlaniyor-' + project_id)
++    published = False
++    try:
++        def copy_file(src, dst):
++            if cancel.is_set():
++                raise Cancelled('İşlem iptal edildi.')
++            return shutil.copy2(src,dst)
++        shutil.copytree(project.folder, stage, copy_function=copy_file)
++        old_timeline = data['id']
++        data = replace_internal_paths(data,project.folder,output)
++        data['id'] = timeline_id
++        name = project.name + ' · Sessizlik temizlendi'
++        data['name'] = name
++        now = int(time.time()*US)
++        meta = replace_internal_paths(copy.deepcopy(project.meta),project.folder,output)
++        meta.update(draft_id=project_id, draft_name=name, draft_fold_path=output.as_posix(),
++                    draft_root_path=str(output.parent), tm_duration=data['duration'], tm_draft_create=now,
++                    tm_draft_modified=now, tm_draft_removed=0, cloud_draft_sync=False,
++                    cloud_draft_cover=False, draft_is_cloud_temp_draft=False,
++                    draft_cloud_last_action_download=False, draft_need_rename_folder=False)
++        # Remove recovery copies in the NEW folder so stale edits cannot override the new timeline.
++        for p in list(stage.rglob('*')):
++            if p.is_file() and (p.suffix in ('.bak','.tmp') or p.name == 'mini_draft.json'):
++                p.unlink()
++        if project.manifest.exists():
++            manifest = load_json(stage/'Timelines/project.json')
++            old_folder = stage/'Timelines'/old_timeline
++            new_folder = stage/'Timelines'/timeline_id
++            old_folder.rename(new_folder)
++            manifest.update(id=uid(), main_timeline_id=timeline_id, create_time=now, update_time=now)
++            for t in manifest['timelines']:
++                if t['id'] == old_timeline:
++                    t.update(id=timeline_id, create_time=now, update_time=now)
++            atomic_json(stage/'Timelines/project.json',manifest)
++            atomic_json(new_folder/project.file.name,data)
++            layout = stage/'timeline_layout.json'
++            if layout.exists():
++                text = layout.read_text(encoding='utf-8').replace(old_timeline,timeline_id)
++                layout.write_text(text,encoding='utf-8')
++        atomic_json(stage/project.file.name,data)
++        atomic_json(stage/'draft_meta_info.json',meta)
++        if caption_cues:
++            from captions import srt_text
++            (stage/'otomatik_altyazi.srt').write_text(srt_text(caption_cues),encoding='utf-8-sig')
++        elif cuts:
++            # A tool-created SRT copied from the input still describes the old timeline.
++            (stage/'otomatik_altyazi.srt').unlink(missing_ok=True)
++        atomic_json(stage/'sessizlik_raporu.json', {
++            'source_project': str(project.folder), 'source_hash': project.hashes[project.file],
++            'original_duration_us':project.duration,'duration_us':data['duration'],
++            'cuts_us': [[c.start,c.end] for c in normalize_cuts(cuts,project.duration)],
++            'capcut_open_verified': False, 'tool_version': VERSION, 'review': review,
++            'repeat_markers':marker_report,
++            'captions':{'enabled':bool(caption_cues),'count':len(caption_cues),'language':'tr',
++                        'editable_text_track':bool(caption_cues),'cues':caption_cues}})
++        # Read back everything before publication. Also catches mirror and duration mistakes.
++        verify = Project(stage)
++        if verify.duration != data['duration']:
++            raise UserError('Yazılan kopyanın süresi doğrulanamadı.')
++        if cancel.is_set():
++            raise Cancelled('İşlem iptal edildi.')
++        project.assert_unchanged()
++        if check_running and capcut_running():
++            raise UserError('CapCut açıldı; kopya yayımlanmadı. CapCut’ı kapatıp tekrar deneyin.')
++        # Prepare registration before publishing. Preserve every existing entry and a byte-exact backup.
++        registration = None
++        if index.exists():
++            before = index.read_bytes()
++            registration = load_json(index)
++            if not isinstance(registration.get('all_draft_store'), list):
++                raise UserError('CapCut proje listesi biçimi tanınmadı.')
++            entry = {k:v for k,v in meta.items() if k not in ('draft_materials','draft_segment_extra_info')}
++            entry.update(draft_json_file=(output/project.file.name).as_posix(),
++                         draft_cover=(output/'draft_cover.jpg').as_posix())
++            registration['all_draft_store'].insert(0,entry)
++            if type(registration.get('draft_ids')) is int:
++                registration['draft_ids'] += 1
++            if index.read_bytes() != before:
++                raise UserError('CapCut proje listesi değişti. Tekrar deneyin.')
++            backup = index.with_name(index.name+'.sessizlik-'+project_id+'.bak')
++            backup.write_bytes(before)
++        stage.rename(output)
++        published = True
++        if registration is not None:
++            try:
++                if index.read_bytes() != before:
++                    raise UserError('CapCut proje listesi değişti; kopya kaydı eklenmedi.')
++                atomic_json(index,registration)
++            except Exception as exc:
++                raise UserError(f'Kopya hazır ama CapCut listesine eklenemedi: {output}\n{exc}') from exc
++        return output
++    finally:
++        # Only this invocation's exact temporary directory can be removed.
++        if not published and stage.exists() and stage.parent == project.folder.parent and stage.name == '.sessizlik-hazirlaniyor-'+project_id:
++            shutil.rmtree(stage)
++
++
++def preview(project: Project, track_index: int, cut: Cut, output: Path,
++            cancel: threading.Event, after: bool = False, full: bool = False) -> None:
++    project.assert_unchanged()
++    if not 0<=cut.start<cut.end<=project.duration:
++        raise UserError('Dinlenecek aralık proje içinde olmalı.')
++    # Include context around each boundary; after mode removes the candidate interval.
++    a, b = max(0,cut.start-US), min(project.duration,cut.end+US)
++    if full:
++        windows = [(cut.start,cut.end)]
++    elif after:
++        windows = [(a,cut.start),(cut.end,b)]
++    elif b-a > 12*US:
++        windows = [(a,cut.start+US),(cut.end-US,b)]
++    else:
++        windows = [(a,b)]
++    segments=sorted(project.data['tracks'][track_index]['segments'],key=lambda s:s['target_timerange']['start'])
++    # None represents a real gap in the selected track; keep it audible as silence.
++    clips = []
++    for left,right in windows:
++        cursor=left
++        for seg in segments:
++            ta,tb=timerange(seg['target_timerange'])
++            x,y=max(left,ta),min(right,tb)
++            if y<=x:
++                continue
++            if x>cursor:
++                clips.append((None,cursor,x))
++            clips.append((seg,x,y));cursor=y
++        if cursor<right:
++            clips.append((None,cursor,right))
++    if not any(seg for seg,_,_ in clips):
++        raise UserError('Bu aralıkta dinlenebilecek ses bulunamadı.')
++    # Render each overlap individually and concatenate WAV PCM through Python's wave module.
++    import wave
++    with tempfile.TemporaryDirectory(prefix='capcut-preview-') as temp:
++        chunks = []
++        for i,(seg,x,y) in enumerate(clips):
++            frames=round((y-x)*22050/US)
++            if seg is None:
++                chunks.append((None,frames))
++                continue
++            _,material=project.materials[seg['material_id']]
++            path=project.resolve_media(material)
++            source=seg['source_timerange']['start']+x-seg['target_timerange']['start']
++            piece=Path(temp)/f'{i}.wav'
++            run_media(['-y','-ss',f'{source/US:.6f}','-t',f'{(y-x)/US:.6f}','-i',str(path),
++                       '-map','0:a:0','-vn','-ar','22050','-ac','1','-c:a','pcm_s16le',str(piece)],cancel)
++            chunks.append((piece,frames))
++        with wave.open(str(output),'wb') as dest:
++            dest.setnchannels(1);dest.setsampwidth(2);dest.setframerate(22050)
++            for path,frames in chunks:
++                if path is None:
++                    dest.writeframes(b'\0'*(frames*2))
++                else:
++                    with wave.open(str(path),'rb') as src:
++                        pcm=src.readframes(frames)
++                        dest.writeframes(pcm+b'\0'*max(0,frames*2-len(pcm)))
+--- a/build_mac.py
++++ b/build_mac.py
+@@ -1,10 +1,12 @@
+ """Build, sign locally, validate, and zip the Apple Silicon application."""
+ import json
++import io
+ from pathlib import Path
+ import platform
+ import plistlib
+ import subprocess
+ import sys
++import unittest
+ from mac_target import require_native_mac
+ from platform_support import VERSION
+ 
+@@ -37,10 +39,27 @@
+                'NSSupportsAutomaticGraphicsSwitching':True}})
+ """
+ 
++def run_tests(root=ROOT):
++    stream=io.StringIO()
++    suite=unittest.defaultTestLoader.discover(str(root/'tests'))
++    result=unittest.TextTestRunner(stream=stream,verbosity=2).run(suite)
++    details=stream.getvalue()
++    print(details,flush=True)
++    if not result.wasSuccessful():
++        report=root/'KURULUM-HATASI.txt'
++        report.write_text('SesPusula - uygulama olusturulamadi\n\n'
++            +'Asil test hatasi asagidadir. Bu dosyanin icerigini paylasabilirsiniz.\n\n'
++            +details,encoding='utf-8')
++        if sys.platform=='darwin':
++            try:subprocess.run(['/usr/bin/open','-a','TextEdit',str(report)],check=False)
++            except OSError:pass
++        raise SystemExit(f'Test basarisiz. Ayrinti: {report}')
++
++
+ def main():
+     try:require_native_mac()
+     except RuntimeError as exc:raise SystemExit(str(exc))
+-    subprocess.run([sys.executable,'-m','unittest','discover','-s',str(ROOT/'tests'),'-v'],cwd=ROOT,check=True)
++    run_tests()
+     output=ROOT/'Dagitim/arm64';output.mkdir(parents=True,exist_ok=True)
+     work=ROOT/'.build/arm64';work.mkdir(parents=True,exist_ok=True)
+     spec=work/'SesPusula.spec';spec.write_text(spec_text(),encoding='utf-8')
+--- a/tests/test_mac_layout.py
++++ b/tests/test_mac_layout.py
+@@ -1,4 +1,6 @@
+ from pathlib import Path
++import json
++import sys
+ import tempfile
+ import threading
+ import unittest
+@@ -8,6 +10,22 @@
+ 
+ 
+ class MacLayoutTests(unittest.TestCase):
++    def test_linked_and_real_project_paths_are_canonical_and_not_duplicated(self):
++        with tempfile.TemporaryDirectory() as scratch:
++            root=Path(scratch);real=root/'real';real.mkdir();alias=root/'alias'
++            if sys.platform=='win32':
++                import _winapi
++                _winapi.CreateJunction(str(real),str(alias))
++            else:alias.symlink_to(real,target_is_directory=True)
++            project=fixture(alias/'source')
++            index=alias/'root_meta_info.json'
++            index.write_text(json.dumps({'all_draft_store':[
++                {'draft_fold_path':str(alias/'source'),'draft_name':'Test'},
++                {'draft_fold_path':str(project.folder),'draft_name':'Test'}]}))
++            found=discover_projects(index)
++            self.assertEqual(len(found),1)
++            self.assertEqual(found[0][1],project.folder)
++
+     def test_info_filename_preserved_in_root_and_timeline_copy(self):
+         with tempfile.TemporaryDirectory() as scratch:
+             root=Path(scratch);project=fixture(root/'source')
+--- a/tests/test_mac_build.py
++++ b/tests/test_mac_build.py
+@@ -1,4 +1,6 @@
+ import ast
++import contextlib
++import io
+ import json
+ from pathlib import Path
+ import tempfile
+@@ -13,6 +15,16 @@
+ 
+ 
+ class MacBuildTests(unittest.TestCase):
++    def test_build_failure_opens_the_actual_test_error_in_visible_file(self):
++        def broken():raise AssertionError('actual failure details')
++        suite=unittest.TestSuite([unittest.FunctionTestCase(broken)])
++        with tempfile.TemporaryDirectory() as scratch:
++            root=Path(scratch)
++            with patch.object(build_mac.unittest.defaultTestLoader,'discover',return_value=suite), patch.object(build_mac.sys,'platform','darwin'), patch.object(build_mac.subprocess,'run') as opened, contextlib.redirect_stdout(io.StringIO()):
++                with self.assertRaises(SystemExit):build_mac.run_tests(root)
++            self.assertIn('actual failure details',(root/'KURULUM-HATASI.txt').read_text(encoding='utf-8'))
++            opened.assert_called_once_with(['/usr/bin/open','-a','TextEdit',str(root/'KURULUM-HATASI.txt')],check=False)
++
+     def test_native_arm64_on_macos26_is_accepted(self):
+         with patch.object(mac_target.sys,'platform','darwin'), patch.object(mac_target.sys,'version_info',(3,11,9)), patch.object(mac_target.platform,'machine',return_value='arm64'), patch.object(mac_target.platform,'mac_ver',return_value=('26.3.2',(),'')):
+             self.assertEqual(mac_target.require_native_mac(),'arm64')
