@@ -59,7 +59,9 @@ Possible repeats become markers, never automatic deletions. Speech detection and
 
 **This is a source/build kit, not an already compiled `.app`.** Extract the ZIP on your Mac, use Python 3.11 with Tk, and open `Mac Uygulamasini Olustur.command`. After a successful build, move `Dagitim/arm64/SesPusula.app` to Applications. The built app should not need external Python or Terminal for daily use.
 
-The intended target is native arm64 on macOS 26 or later, including M1–M5 and MacBook Neo. The new Mac package passed 71 shared, packaging, and simulated adapter tests on Windows; the new app has not yet been built or run on macOS. The release is marked as a pre-release for native testing. Turkish instructions and a first-use checklist are included in the ZIP.
+The intended target is native arm64 on macOS 26 or later, including M1–M5 and MacBook Neo. The Mac source suite has 73 shared, packaging, and simulated adapter tests; the new app has not yet been built or run on macOS. The release is marked as a pre-release for native testing. Turkish instructions and a first-use checklist are included in the ZIP.
+
+Current Mac sources, including the installation fix, are in [`sespusula for mac/`](sespusula%20for%20mac/README.md). Git excludes the offline wheels and model: overlay these sources onto the extracted release kit before building. See that folder's README for details.
 
 ### Existing Windows portable package
 
@@ -102,7 +104,7 @@ These instructions describe the source requirements. A fresh installation from G
 - Supports normal-speed audio/video, still images, and basic text tracks within its compatibility checks.
 - Speed ramps, reverse playback, compound clips, keyframes, transitions, word-timed captions, and unverified effects can block output.
 - Uses **Silero VAD** for speech detection and **Whisper small** for Turkish transcription on CPU/int8.
-- The Mac build kit is available in Releases. Native execution of the new Mac app has not yet been verified; the repository root contains the Windows working sources.
+- The Mac build kit is available in Releases, with current Mac sources in `sespusula for mac/`. Native execution of the new Mac app has not yet been verified; the repository root contains the Windows working sources.
 - Automated project JSON/SRT checks have passed. Those checks do not verify playback, marker/subtitle appearance, or video export inside CapCut.
 
 SesPusula is an independent project and is not affiliated with CapCut.

@@ -1,0 +1,13 @@
+.state/
+.venv/
+.build/
+.models/
+wheelhouse/
+Dagitim/
+__pycache__/
+*.py[cod]
+*.log
+*.zip
+.env
+.env.*
+gpt.md
