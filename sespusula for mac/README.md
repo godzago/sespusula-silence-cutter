@@ -38,16 +38,6 @@ The local build uses ad-hoc signing. It is not Developer ID signed or notarized.
 
 Silence is cut until 100 ms before the next detected speech, with inward video-frame rounding. Repeats are markers, never automatic deletions. Review is optional; there is no approval queue. Audio levels and existing alignment are preserved.
 
-## Included updates
-
-- Dark charcoal interface, one turquoise accent, project/microphone cards, and live duration cards.
-- Current automatic silence rules and approval-free export.
-- Repeat markers, editable Turkish captions, and SRT output.
-- Subtitle replacement, stale-SRT cleanup, word-boundary fixes, and review/signature caching from version 0.8.1.
-- Native Mac playback through `afplay`, Finder integration, Mac CapCut locations, and `draft_info.json` support.
-- Mac font selection and Retina-aware application metadata.
-- ARM-only dependency installation with hashes, native-architecture checks, and source-change-aware setup validation.
-
 ## Target and validation
 
 The intended target is **native arm64 on macOS 26 or later**, including M1–M5 and MacBook Neo. There is no chip-name whitelist. Intel/Rosetta builds are rejected to avoid mixing architectures. Speech processing uses CPU/int8; this package does not add Metal or Neural Engine acceleration.
@@ -58,16 +48,7 @@ After your first Mac build, follow [MAC-TEST.md](MAC-TEST.md). Passing the autom
 
 CapCut JSON version 360000 and one active timeline are supported. Speed ramps, compound clips, reverse playback, keyframes, transitions, word-timed captions, and unsupported effects may block output. Keep all source media at their original paths.
 
-## Files and local data
-
-- `Mac Uygulamasini Olustur.command`: prepare and build the standalone app.
-- `Kur ve Ac.command`: run the source version for development.
-- `Test Et.command`: verify the source environment and run tests.
-- `wheelhouse/common` and `wheelhouse/arm64`: locked Mac dependencies; no Windows or Intel packages.
-- `.models/whisper-small`: local Turkish transcription model.
-- `build-status.json`: preparation status; not a substitute for a real native build report.
-- `Dagitim/arm64/build-report.json`: written only after a successful native build and app self-test.
-- `Lisanslar`: third-party license notices.
+## Local data
 
 The new standalone app stores its settings, cache, and reviews in `~/Library/Application Support/SesPusulaSilenceCutter`. It uses a different bundle identifier and settings folder from the old SesPusulaMac app. Existing Mac source and app files are not automatically replaced.
 

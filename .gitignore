@@ -240,3 +240,40 @@ SHA256SUMS.json
 *.srt
 .env.*
 !.env.example
+# Local credentials and machine settings
+.codex/
+.agents/
+.aws/
+.ssh/
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+client_secret*.json
+secrets.json
+
+# Private CapCut project data and generated reports
+draft_content.json
+draft_info.json
+draft_meta_info.json
+root_meta_info.json
+sessizlik_raporu.json
+KURULUM-HATASI.txt
+
+# Local build outputs and dependency bundles
+.build/
+wheelhouse/
+Dagitim/
+*.app/
+*.dmg
+*.whl
+*.bak
+
+# Additional recordings
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.webm
+*.avi

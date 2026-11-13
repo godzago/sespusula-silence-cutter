@@ -1,77 +1,27 @@
-﻿# SesPusula — Silence Cutter for CapCut
+# SesPusula — Silence Cutter for CapCut
 
-**Keep the speech. Cut the silence. Get back to creating.**
+SesPusula removes silence from pre-aligned CapCut recordings. It analyzes your clean microphone and applies matching cuts across supported audio and video tracks, saving a separate project copy.
 
-SesPusula is a desktop tool that removes silent parts from CapCut projects. It analyzes your clean microphone and applies the same cuts to every supported audio and video track. Your camera, screen recording, and microphone stay aligned.
+![SesPusula desktop interface](docs/images/sespusula-app.png)
 
-It saves a separate project copy and keeps your original project unchanged.
+The interface is in Turkish. Normal analysis runs locally.
 
-![SesPusula 0.8.1 desktop interface](docs/images/sespusula-app.png)
+## What it does
 
-*Real Windows screenshot before selecting a project. The current interface is in Turkish.*
+- Automatically cuts silence across aligned tracks, with optional review.
+- Marks possible repeated takes without deleting them.
+- Creates optional editable Turkish subtitles and SRT files.
+- Keeps the original project and source media unchanged.
 
-## Why I built it
-
-I make videos for my YouTube channel, **UlasCS**. Removing pauses from long recordings used to take hours, especially with a camera, a screen recording, and a separate microphone.
-
-In my own UlasCS workflow, SesPusula helped bring an editing stage that used to take around **6 hours down to about 30 minutes**. It made a huge difference to how I prepare my videos and gave me more time for the creative work.
-
-This is my personal experience, not a measured benchmark or a promise for every project. Recording length, computer speed, and the amount of manual editing affect the result.
-
-## Features
-
-| Feature | What it does |
-| --- | --- |
-| Automatic silence cuts | Finds pauses in the main microphone recording. |
-| Cuts across supported tracks | Removes the same time ranges from the aligned timeline. |
-| No approval queue | Lets you create the copy without approving every cut. |
-| Optional review | Listen to a cut, keep an interval, or adjust its boundaries. |
-| Possible repeat markers | Marks possible repeated takes without deleting spoken content. |
-| Turkish subtitles | Creates editable CapCut text and an SRT file. |
-| Local processing | Runs speech models locally without internet during normal analysis. |
-| Original project protection | Writes a separate copy and checks the saved project data. |
-
-## How to use it
-
-1. Align your recordings in CapCut first. SesPusula does not synchronize recordings or change audio levels.
-2. Open SesPusula and select your CapCut project.
-3. Select your clean microphone as the analysis source.
-4. Click **Jump cut analiz et** to analyze the whole timeline.
-5. Optionally review cuts, enable Turkish subtitles, or mark possible repeats.
-6. Save and close CapCut, then click **CapCut kopyası oluştur** to create the edited copy.
-7. Open the new copy in CapCut, check the result, and continue editing.
-
-Keep the source media in its original location. The new project still refers to those files.
-
-### Cutting behavior
-
-Silence is removed up to **100 ms before the next detected speech**. Cuts are rounded inward to full video frames, so the remaining gap can be slightly longer. Start/end silence and gaps between microphone clips are included. If no speech is detected, the entire recording is not automatically deleted.
-
-Possible repeats become markers, never automatic deletions. Speech detection and word timing can make mistakes, so listening to the result is still part of editing.
+I built it for my UlasCS videos. In my own workflow, an editing stage fell from about six hours to 30 minutes. This is personal experience, not a benchmark or a guaranteed result.
 
 ## Installation
 
-### macOS 26 — Apple Silicon build kit
+### Windows
 
-[Download the Mac build kit](https://github.com/godzago/sespusula-silence-cutter/releases/tag/macos26-arm64-v0.8.1-source) — includes the current interface, offline ARM dependencies, and local Whisper model. A SHA-256 checksum file is provided with the ZIP.
+If you already have the complete portable package, open `SesPusula.exe` or `SesPusula.cmd`. Keep `.runtime`, `.models`, and `vendor` with the app.
 
-**Mac build fix:** after extracting the original kit, download [the small installation fix](https://github.com/godzago/sespusula-silence-cutter/releases/download/macos26-arm64-v0.8.1-source/SesPusula-Mac-kurulum-duzeltmesi.zip), extract it, and open `SesPusula Mac Duzelt.command`. It backs up four source/test files, fixes linked-folder path handling, and restarts the build. If a test still fails, the actual error opens automatically in TextEdit. [Details](docs/mac/INSTALLATION-FIX.md).
-
-**This is a source/build kit, not an already compiled `.app`.** Extract the ZIP on your Mac, use Python 3.11 with Tk, and open `Mac Uygulamasini Olustur.command`. After a successful build, move `Dagitim/arm64/SesPusula.app` to Applications. The built app should not need external Python or Terminal for daily use.
-
-The intended target is native arm64 on macOS 26 or later, including M1–M5 and MacBook Neo. The Mac source suite has 73 shared, packaging, and simulated adapter tests; the new app has not yet been built or run on macOS. The release is marked as a pre-release for native testing. Turkish instructions and a first-use checklist are included in the ZIP.
-
-Current Mac sources, including the installation fix, are in [`sespusula for mac/`](sespusula%20for%20mac/README.md). Git excludes the offline wheels and model: overlay these sources onto the extracted release kit before building. See that folder's README for details.
-
-### Existing Windows portable package
-
-Open **`SesPusula.exe`** or **`SesPusula.cmd`** in the complete package. A separate Python installation is not needed. Keep the folder together, including `.runtime`, `.models`, and `vendor`.
-
-**Cloning this repository does not download the portable package.** Python binaries, model weights, bundled dependencies, and private working data are excluded from Git. This source upload does not include a downloadable portable release.
-
-### From source — Windows
-
-Use Python **3.11** with Tk support and FFmpeg. The existing package uses Python 3.11.9.
+**This repository contains source code, not the complete Windows portable package.** To run from source, install Python 3.11 with Tk and FFmpeg, then:
 
 ```powershell
 git clone https://github.com/godzago/sespusula-silence-cutter.git
@@ -80,74 +30,61 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
 ```
 
-Install FFmpeg separately and make sure `ffmpeg` is available on your `PATH`. The app can also find a binary under `vendor/imageio_ffmpeg/binaries/`.
-
-For transcription, subtitles, and repeat detection:
+Make `ffmpeg` available on your `PATH`. Prepare the local speech model:
 
 1. Download `config.json`, `model.bin`, `tokenizer.json`, and `vocabulary.txt` from [the pinned faster-whisper-small revision](https://huggingface.co/Systran/faster-whisper-small/tree/536b0662742c02347bc0e980a01041f333bce120).
-2. Place them in `.models/whisper-small/` at the repository root.
-3. Copy [docs/model-manifest.json](docs/model-manifest.json) to `.models/whisper-small/local-manifest.json`. It records the expected revision and file hashes.
+2. Put them in `.models/whisper-small/`.
+3. Copy [docs/model-manifest.json](docs/model-manifest.json) into that folder as `local-manifest.json`.
 
-The installed `faster-whisper` package supplies the Silero VAD asset. Once dependencies and models are ready, launch:
+Launch with:
 
 ```powershell
 .\.venv\Scripts\python.exe entrypoint.py
 ```
 
-These instructions describe the source requirements. A fresh installation from Git has not yet been tested; the verified environment is the existing Windows portable package. Full packaging/build scripts are not included in this repository.
+The existing Windows portable environment is tested; a fresh source installation has not yet been verified. Windows portable build scripts are not included.
 
-## Compatibility and limits
+### Mac — Apple Silicon, macOS 26+
 
-- Application version: **0.8.1**.
-- Supports CapCut JSON version **360000** and one active timeline.
-- Developed with Windows CapCut **9.6.0.4097**.
-- Supports normal-speed audio/video, still images, and basic text tracks within its compatibility checks.
-- Speed ramps, reverse playback, compound clips, keyframes, transitions, word-timed captions, and unverified effects can block output.
-- Uses **Silero VAD** for speech detection and **Whisper small** for Turkish transcription on CPU/int8.
-- The Mac build kit is available in Releases, with current Mac sources in `sespusula for mac/`. Native execution of the new Mac app has not yet been verified; the repository root contains the Windows working sources.
-- Automated project JSON/SRT checks have passed. Those checks do not verify playback, marker/subtitle appearance, or video export inside CapCut.
+The [Mac release](https://github.com/godzago/sespusula-silence-cutter/releases/tag/macos26-arm64-v0.8.1-source) is a **source/build kit, not a ready-made `.app`**. It includes the offline dependencies and model that Git excludes.
 
-SesPusula is an independent project and is not affiliated with CapCut.
+Download and extract the kit, then overlay the current files from [`sespusula for mac/`](sespusula%20for%20mac/README.md), preserving `wheelhouse/` and `.models/`. Install Python 3.11 with Tk and run `Mac Uygulamasini Olustur.command`. The output is `Dagitim/arm64/SesPusula.app`.
 
-## Tests
+If you use the original release without the current sources, apply the [installation fix](docs/mac/INSTALLATION-FIX.md) first. See the [Mac guide](sespusula%20for%20mac/README.md) for build steps and troubleshooting.
 
-The current suite has **51 tests**, covering timeline cuts, project copies, subtitles, repeat markers, review state, and interface behavior.
+**The current Mac app has not been built or run on a Mac.** Windows tests of its source do not verify native Mac operation.
 
-Existing portable environment:
+## Usage
 
-```powershell
-.\.runtime\python.exe -m unittest discover -s tests -v
-```
+1. Align your recordings in CapCut and save the project.
+2. Open SesPusula, select the project, and choose the clean microphone track.
+3. Click **Analiz et** to analyze the whole timeline.
+4. Optionally review cuts, add Turkish subtitles, or mark possible repeats.
+5. Save and close CapCut, then click **CapCut kopyası oluştur**.
+6. Open the new copy in CapCut and check the result before exporting.
 
-Prepared source environment:
+Keep source media at its original location: the copy still references those files. SesPusula preserves existing alignment and audio levels; align the recordings yourself before analysis.
+
+Silence cuts stop 100 ms before the next detected speech and round inward to full video frames. Start/end silence and gaps between microphone clips are included. If no speech is detected, the whole recording is not automatically deleted. Detection can make mistakes; review the output.
+
+## Compatibility
+
+- Version **0.8.1**; CapCut JSON **360000**, one active timeline. Developed with Windows CapCut **9.6.0.4097**.
+- Supports normal-speed audio/video, images, and basic text within its compatibility checks.
+- Speed ramps, reverse playback, compound clips, keyframes, transitions, word-timed captions, and unsupported effects may block output.
+- Uses Silero VAD and Whisper small, with Turkish transcription on CPU/int8.
+- Automated JSON/SRT checks passed. Playback, subtitle/marker appearance, and export inside CapCut remain unverified.
+
+## Development and privacy
+
+Windows tests (a desktop session is required for GUI tests):
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Interface tests need a desktop session. `Kendini Test Et.cmd` provides additional runtime checks in the portable package.
+Local settings, caches, reviews, models, credentials, and recordings should stay outside Git. For bug reports, include the app version, CapCut version, and error message; remove personal paths and recording content.
 
-## Project structure
-
-| File | Purpose |
-| --- | --- |
-| `app.py` | Desktop interface |
-| `silence_core.py` | CapCut projects, timeline editing, and safe copies |
-| `speech_analysis.py` / `speech_worker.py` | Local speech detection and transcription |
-| `jump_cut.py` | Automatic silence-cut rules |
-| `review.py` | Cut selection and saved review state |
-| `captions.py` | Subtitle timing, text tracks, and SRT |
-| `timeline_markers.py` | Repeat markers and time mapping |
-| `export_pipeline.py` | Final cuts, subtitles, and project-copy creation |
-| `tests/` | Regression tests |
-
-## Privacy and bug reports
-
-Local settings, caches, reviews, and backups live in `.state/`. This folder is excluded from Git, along with models, bundled dependencies, and common recording formats.
-
-For bug reports, include the application version, CapCut version, and error message. Remove personal paths and private recordings from shared examples.
-
-Third-party notices are in [Lisanslar](Lisanslar/). A license for the application's own source code has not been selected yet.
+Third-party notices: [Lisanslar](Lisanslar/). A license for the application's own source has not yet been selected. SesPusula is independent and is not affiliated with CapCut.
 
 [Turkish usage guide](docs/README.tr.md)
-
